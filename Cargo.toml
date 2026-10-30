@@ -7,4 +7,8 @@ version = "0.1.0"
 edition = "2024"
 repository = "https://github.com/edmccard/robo65xx"
 
-[dependencies]
+[features]
+test-perfect = []
+
+[build-dependencies]
+cc = "1.0"

@@ -54,8 +54,9 @@ impl CPU {
                 self.intg = false;
             }
             5 => {
-                self.vector = bus.data as u16;
+                let vec_lo = bus.data as u16;
                 bus.read(self.vector.wrapping_add(1));
+                self.vector = vec_lo;
             }
             6 => {
                 self.pc = (bus.data as u16).wrapping_shl(8) | self.vector;
