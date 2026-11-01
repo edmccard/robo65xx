@@ -35,23 +35,21 @@
 uint16_t
 readAddressBus(void *state)
 {
-	return readNodes(state, 16, (nodenum_t[]){ ab0, ab1, ab2, ab3, ab4, ab5, ab6, ab7, ab8, ab9, ab10, ab11, ab12, ab13, ab14, ab15 });
+	return readNodes(state, 16, (nodenum_t[]){ab0, ab1, ab2, ab3, ab4, ab5, ab6, ab7, ab8, ab9, ab10, ab11, ab12, ab13, ab14, ab15});
 }
 
 uint8_t
 readDataBus(void *state)
 {
-	return readNodes(state, 8, (nodenum_t[]){ db0, db1, db2, db3, db4, db5, db6, db7 });
+	return readNodes(state, 8, (nodenum_t[]){db0, db1, db2, db3, db4, db5, db6, db7});
 }
 
-void
-writeDataBus(void *state, uint8_t d)
+void writeDataBus(void *state, uint8_t d)
 {
-	writeNodes(state, 8, (nodenum_t[]){ db0, db1, db2, db3, db4, db5, db6, db7 }, d);
+	writeNodes(state, 8, (nodenum_t[]){db0, db1, db2, db3, db4, db5, db6, db7}, d);
 }
 
-BOOL
-readRW(void *state)
+BOOL readRW(void *state)
 {
 	return isNodeHigh(state, rw);
 }
@@ -59,49 +57,49 @@ readRW(void *state)
 uint8_t
 readA(void *state)
 {
-	return readNodes(state, 8, (nodenum_t[]){ a0,a1,a2,a3,a4,a5,a6,a7 });
+	return readNodes(state, 8, (nodenum_t[]){a0, a1, a2, a3, a4, a5, a6, a7});
 }
 
 uint8_t
 readX(void *state)
 {
-	return readNodes(state, 8, (nodenum_t[]){ x0,x1,x2,x3,x4,x5,x6,x7 });
+	return readNodes(state, 8, (nodenum_t[]){x0, x1, x2, x3, x4, x5, x6, x7});
 }
 
 uint8_t
 readY(void *state)
 {
-	return readNodes(state, 8, (nodenum_t[]){ y0,y1,y2,y3,y4,y5,y6,y7 });
+	return readNodes(state, 8, (nodenum_t[]){y0, y1, y2, y3, y4, y5, y6, y7});
 }
 
 uint8_t
 readP(void *state)
 {
-	return readNodes(state, 8, (nodenum_t[]){ p0,p1,p2,p3,p4,p5,p6,p7 });
+	return readNodes(state, 8, (nodenum_t[]){p0, p1, p2, p3, p4, p5, p6, p7});
 }
 
 uint8_t
 readIR(void *state)
 {
-	return readNodes(state, 8, (nodenum_t[]){ notir0,notir1,notir2,notir3,notir4,notir5,notir6,notir7 }) ^ 0xFF;
+	return readNodes(state, 8, (nodenum_t[]){notir0, notir1, notir2, notir3, notir4, notir5, notir6, notir7}) ^ 0xFF;
 }
 
 uint8_t
 readSP(void *state)
 {
-	return readNodes(state, 8, (nodenum_t[]){ s0,s1,s2,s3,s4,s5,s6,s7 });
+	return readNodes(state, 8, (nodenum_t[]){s0, s1, s2, s3, s4, s5, s6, s7});
 }
 
 uint8_t
 readPCL(void *state)
 {
-	return readNodes(state, 8, (nodenum_t[]){ pcl0,pcl1,pcl2,pcl3,pcl4,pcl5,pcl6,pcl7 });
+	return readNodes(state, 8, (nodenum_t[]){pcl0, pcl1, pcl2, pcl3, pcl4, pcl5, pcl6, pcl7});
 }
 
 uint8_t
 readPCH(void *state)
 {
-	return readNodes(state, 8, (nodenum_t[]){ pch0,pch1,pch2,pch3,pch4,pch5,pch6,pch7 });
+	return readNodes(state, 8, (nodenum_t[]){pch0, pch1, pch2, pch3, pch4, pch5, pch6, pch7});
 }
 
 uint16_t
@@ -118,8 +116,7 @@ readPC(void *state)
 
 static unsigned int cycle;
 
-void
-step(void *state)
+BOOL step(void *state)
 {
 	BOOL clk = isNodeHigh(state, clk0);
 
@@ -135,8 +132,8 @@ void *
 initAndResetChip()
 {
 	/* set up data structures for efficient emulation */
-	nodenum_t nodes = sizeof(netlist_6502_node_is_pullup)/sizeof(*netlist_6502_node_is_pullup);
-	nodenum_t transistors = sizeof(netlist_6502_transdefs)/sizeof(*netlist_6502_transdefs);
+	nodenum_t nodes = sizeof(netlist_6502_node_is_pullup) / sizeof(*netlist_6502_node_is_pullup);
+	nodenum_t transistors = sizeof(netlist_6502_transdefs) / sizeof(*netlist_6502_transdefs);
 	void *state = setupNodesAndTransistors(netlist_6502_transdefs,
 										   netlist_6502_node_is_pullup,
 										   nodes,
@@ -166,10 +163,9 @@ initAndResetChip()
 	return state;
 }
 
-void
-destroyChip(void *state)
+void destroyChip(void *state)
 {
-    destroyNodesAndTransistors(state);
+	destroyNodesAndTransistors(state);
 }
 
 /************************************************************
@@ -178,8 +174,7 @@ destroyChip(void *state)
  *
  ************************************************************/
 
-void
-chipStatus(void *state)
+void chipStatus(void *state)
 {
 	BOOL clk = isNodeHigh(state, clk0);
 	uint16_t a = readAddressBus(state);

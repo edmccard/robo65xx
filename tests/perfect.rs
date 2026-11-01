@@ -3,11 +3,14 @@ use std::{
     fmt::Display,
 };
 
+// http://www.visual6502.org/JSSim/expert.html?graphics=f&loglevel=2&steps=50&a=0010&d=58e60f38690260&a=fffe&d=2000&a=0020&d=e840&r=0010&irq0=20&irq1=26&logmore=irq,INTG,ir
+
 unsafe extern "C" {
     fn initAndResetChip() -> *mut c_void;
     fn destroyChip(state: *mut c_void);
     fn readAddressBus(state: *mut c_void) -> u16;
     fn readDataBus(state: *mut c_void) -> u8;
+    fn writeDataBus(state: *mut c_void, d: u8);
     fn readRW(state: *mut c_void) -> c_int;
     fn readA(state: *mut c_void) -> u8;
     fn readX(state: *mut c_void) -> u8;
@@ -18,20 +21,33 @@ unsafe extern "C" {
     fn readPC(state: *mut c_void) -> u16;
     fn isNodeHigh(state: *mut c_void, nn: u16) -> c_int;
     fn setNode(state: *mut c_void, nn: u16, s: c_int);
-    fn step(state: *mut c_void);
+    fn step(state: *mut c_void) -> c_int;
 }
 
 struct P6502(*mut c_void);
 
 impl P6502 {
-    fn new() -> Self {
-        unsafe {
+    fn new(mem: &mut [u8]) -> Self {
+        let mut cpu = unsafe {
             let state = initAndResetChip();
-            for _ in 0..9 {
-                step(state);
-                step(state);
-            }
             Self(state)
+        };
+        for i in 0..19 {
+            cpu.step(mem);
+        }
+        cpu
+    }
+
+    fn step(&mut self, mem: &mut [u8]) {
+        unsafe {
+            if step(self.0) != 0 {
+                let a = readAddressBus(self.0);
+                if self.write() {
+                    mem[a as usize] = readDataBus(self.0);
+                } else {
+                    writeDataBus(self.0, mem[a as usize]);
+                }
+            }
         }
     }
 
@@ -144,15 +160,21 @@ use robo65xx::*;
 
 #[test]
 fn test_1() {
-    let _foo = P6502::new();
-    println!("{}", _foo);
+    let mut pmem = [0u8; 65536];
+    let pcpu = P6502::new(&mut pmem);
+    println!("P {}", pcpu);
 
+    let mut rmem = [0u8; 65536];
     let mut ctrl = Control::init();
     let mut bus = Bus::new();
     let mut cpu = CPU::init(&bus, &mut ctrl);
-    for _ in 0..7 {
+    for _ in 0..8 {
         cpu.tick(&mut bus, &mut ctrl);
-        // do mem here
+        if bus.rw() {
+            bus.data = rmem[bus.addr as usize];
+        } else {
+            rmem[bus.addr as usize] = bus.data;
+        }
     }
-    println!("{} {} {}", &ctrl, &bus, &cpu);
+    println!("R {} {} {}", &ctrl, &bus, &cpu);
 }

@@ -116,6 +116,14 @@ impl Flags {
     pub fn clear_i(&mut self) {
         self.0 &= 0b11111011;
     }
+
+    fn set_nz(&mut self, val: u8) {
+        self.0 &= val & 0b01111101;
+        self.0 |= val & 0b10000000;
+        if val == 0 {
+            self.0 |= 0b00000010;
+        }
+    }
 }
 
 impl Display for Flags {
@@ -248,7 +256,7 @@ impl CPU {
 
     // Set up opcode fetch
     fn fetch(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.read_pc(bus);
+        bus.read(self.pc);
         ctrl.sync = true;
     }
 }

@@ -1,14 +1,15 @@
 use super::*;
 
+fn add_without_carry(a: u16, b: u8) -> u16 {
+    a.wrapping_add(b as u16) & 0xff00
+}
+
 impl CPU {
     // BRK
     fn op_00(&mut self, bus: &mut Bus, ctrl: &mut Control) {
         match self.op_cycle {
             0 => {
                 bus.read(self.pc);
-                if !self.intg {
-                    self.pc = self.pc.wrapping_add(1);
-                }
             }
             1 => {
                 if ctrl.res {
@@ -69,19 +70,13 @@ impl CPU {
     }
 
     // ORA ($nn,X)
-    fn op_01(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
+    fn op_01(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        if self.op_cycle < 5 {
+            self.izx(bus, ctrl);
+        } else {
+            self.a |= bus.data;
+            self.flags.set_nz(bus.data);
+            self.fetch(bus, ctrl);
         }
     }
     fn op_02(&mut self) {
@@ -3898,7 +3893,7 @@ impl CPU {
     pub(super) fn exec(&mut self, bus: &mut Bus, ctrl: &mut Control) {
         match self.op {
             0x00 => self.op_00(bus, ctrl),
-            0x01 => self.op_01(),
+            0x01 => self.op_01(bus, ctrl),
             0x02 => self.op_02(),
             0x03 => self.op_03(),
             0x04 => self.op_04(),
@@ -4153,6 +4148,31 @@ impl CPU {
             0xfd => self.op_fd(),
             0xfe => self.op_fe(),
             0xff => self.op_ff(),
+        }
+    }
+
+    fn izx(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        match self.op_cycle {
+            0 => {
+                self.read_pc(bus);
+            }
+            1 => {
+                self.vector = bus.data as u16;
+                bus.read(self.vector);
+            }
+            2 => {
+                self.vector = add_without_carry(self.vector, self.x);
+                bus.read(self.vector);
+            }
+            3 => {
+                bus.read(add_without_carry(self.vector, 1));
+                self.vector = bus.data as u16;
+            }
+            4 => {
+                bus.read((bus.data as u16).wrapping_shl(8) | self.vector);
+                self.poll_intg(ctrl);
+            }
+            _ => unreachable!(),
         }
     }
 }
