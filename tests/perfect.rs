@@ -32,7 +32,7 @@ impl P6502 {
             let state = initAndResetChip();
             Self(state)
         };
-        for i in 0..19 {
+        for _ in 0..18 {
             cpu.step(mem);
         }
         cpu
@@ -122,13 +122,27 @@ impl P6502 {
             setNode(self.0, 103, !s as c_int);
         }
     }
+
+    fn activeStates(&self) -> [bool; 7] {
+        unsafe {
+            [
+                isNodeHigh(self.0, 1536) == 0, // clock1
+                isNodeHigh(self.0, 156) == 0,  // clock2
+                isNodeHigh(self.0, 971) == 0,  // t2
+                isNodeHigh(self.0, 1567) == 0, // t3
+                isNodeHigh(self.0, 690) == 0,  // t4
+                isNodeHigh(self.0, 909) == 0,  // t5
+                isNodeHigh(self.0, 1481) != 0, // VEC1
+            ]
+        }
+    }
 }
 
 impl Display for P6502 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} {}{}{} {} {:04x} {:02x} {} : {:04x} {:02x} {:02x} {:02x} {:02x} {:02x} {}",
+            "{} {}{}{} {} {:04x} {:02x} {} : {:04x} {:02x} {:02x} {:02x} {:02x} {:02x} {} {}",
             if self.sync() { "S" } else { "s" },
             if self.res() { "R" } else { "r" },
             if self.nmi() { "N" } else { "n" },
@@ -143,9 +157,34 @@ impl Display for P6502 {
             self.x(),
             self.y(),
             self.sp(),
-            Flags(self.flags())
+            Flags(self.flags()),
+            ["T0", "T1", "T2", "T3", "T4", "T5", "T6"]
+                .iter()
+                .zip(self.activeStates())
+                .filter(|&(_, active)| active)
+                .map(|(&s, _)| s)
+                .collect::<Vec<_>>()
+                .join("+")
         )
     }
+}
+
+fn start_cpus(pmem: &mut [u8], rmem: &mut [u8]) -> (P6502, CPU, Control, Bus) {
+    let pcpu = P6502::new(pmem);
+
+    let mut ctrl = Control::init();
+    let mut bus = Bus::new();
+    let mut cpu = CPU::init(&bus, &mut ctrl);
+    for _ in 0..7 {
+        cpu.tick(&mut bus, &mut ctrl);
+        if bus.rw() {
+            bus.data = rmem[bus.addr as usize];
+        } else {
+            rmem[bus.addr as usize] = bus.data;
+        }
+    }
+
+    (pcpu, cpu, ctrl, bus)
 }
 
 impl Drop for P6502 {
@@ -161,20 +200,9 @@ use robo65xx::*;
 #[test]
 fn test_1() {
     let mut pmem = [0u8; 65536];
-    let pcpu = P6502::new(&mut pmem);
-    println!("P {}", pcpu);
-
     let mut rmem = [0u8; 65536];
-    let mut ctrl = Control::init();
-    let mut bus = Bus::new();
-    let mut cpu = CPU::init(&bus, &mut ctrl);
-    for _ in 0..8 {
-        cpu.tick(&mut bus, &mut ctrl);
-        if bus.rw() {
-            bus.data = rmem[bus.addr as usize];
-        } else {
-            rmem[bus.addr as usize] = bus.data;
-        }
-    }
+    pmem[0] = 0xa9;
+    let (mut pcpu, cpu, ctrl, bus) = start_cpus(&mut pmem, &mut rmem);
+    println!("P {}", pcpu);
     println!("R {} {} {}", &ctrl, &bus, &cpu);
 }

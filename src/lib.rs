@@ -101,6 +101,14 @@ impl Flags {
         self.0 & 0b00000100 != 0
     }
 
+    fn update_i(&mut self, v: bool) {
+        if v {
+            self.0 |= 0b00000100;
+        } else {
+            self.0 &= 0b11111011;
+        }
+    }
+
     pub fn z(&self) -> bool {
         self.0 & 0b00000010 != 0
     }
@@ -109,15 +117,15 @@ impl Flags {
         self.0 & 0b00000001 != 0
     }
 
-    pub fn set_i(&mut self) {
-        self.0 |= 0b00000100;
+    fn update_c(&mut self, v: bool) {
+        if v {
+            self.0 |= 0b00000001;
+        } else {
+            self.0 &= 0b11111110;
+        }
     }
 
-    pub fn clear_i(&mut self) {
-        self.0 &= 0b11111011;
-    }
-
-    fn set_nz(&mut self, val: u8) {
+    pub fn set_nz(&mut self, val: u8) {
         self.0 &= val & 0b01111101;
         self.0 |= val & 0b10000000;
         if val == 0 {
@@ -198,7 +206,7 @@ impl CPU {
         if ctrl.res {
             cpu.intg = true;
         } else {
-            cpu.flags.set_i();
+            cpu.flags.update_i(true);
             cpu.sp = cpu.sp.wrapping_sub(3);
         }
         ctrl.sync = true;
@@ -242,7 +250,6 @@ impl CPU {
 
     // Read from the stack.
     // `inc` should only be false when called from BRK while reset is true.
-    #[inline(always)]
     fn read_sp(&mut self, bus: &mut Bus) {
         bus.read(self.sp as u16 | 0x100);
         self.sp = self.sp.wrapping_add(1);
