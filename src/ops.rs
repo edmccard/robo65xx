@@ -13,7 +13,7 @@ impl CPU {
             }
             1 => {
                 if ctrl.res {
-                    bus.read(self.sp as u16 | 0x100); // dummy read
+                    self.read_sp(bus); // dummy read
                     self.sp = self.sp.wrapping_sub(1);
                 } else {
                     self.write_sp(bus, (self.pc >> 8) as u8);
@@ -21,7 +21,7 @@ impl CPU {
             }
             2 => {
                 if ctrl.res {
-                    bus.read(self.sp as u16 | 0x100); // dummy read
+                    self.read_sp(bus); // dummy read
                     self.sp = self.sp.wrapping_sub(1);
                 } else {
                     self.write_sp(bus, self.pc as u8);
@@ -38,7 +38,7 @@ impl CPU {
                 }
 
                 if ctrl.res {
-                    bus.read(self.sp as u16 | 0x100); // dummy read
+                    self.read_sp(bus); // dummy read
                     self.sp = self.sp.wrapping_sub(1);
                 } else if self.intg {
                     self.write_sp(bus, self.flags.0 & 0b1110_1111);
@@ -67,114 +67,32 @@ impl CPU {
         }
     }
 
-    // ORA ($nn,X)
     fn op_01(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 5 {
-            self.izx(bus);
-            if self.op_cycle == 4 {
-                self.poll_intg(ctrl);
-            }
-        } else {
-            self.ora(bus.data);
-            self.fetch(bus, ctrl);
-        }
+        self.izx_alu(Self::ora, bus, ctrl);
     }
 
-    // KIL
     fn op_02(&mut self, bus: &mut Bus, ctrl: &mut Control) {
         self.kil(bus, ctrl);
     }
 
-    // SLO ($nn, X)
     fn op_03(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 5 {
-            self.izx(bus);
-        } else {
-            match self.op_cycle {
-                5 => {
-                    bus.write(bus.addr, bus.data); // dummy write
-                }
-                6 => {
-                    let data = self.asl(bus.data);
-                    bus.write(bus.addr, data);
-                    self.ora(data);
-                    self.poll_intg(ctrl);
-                }
-                7 => {
-                    self.fetch(bus, ctrl);
-                }
-                _ => unreachable!(),
-            }
-        }
+        self.izx_rmw(Self::slo, bus, ctrl);
     }
 
-    // NOP $nn
     fn op_04(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 2 {
-            self.zp(bus);
-            if self.op_cycle == 1 {
-                self.poll_intg(ctrl);
-            }
-        } else {
-            self.fetch(bus, ctrl);
-        }
+        self.zp_alu(Self::nop, bus, ctrl);
     }
 
-    // ORA $nn
     fn op_05(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 2 {
-            self.zp(bus);
-            if self.op_cycle == 1 {
-                self.poll_intg(ctrl);
-            }
-        } else {
-            self.ora(bus.data);
-            self.fetch(bus, ctrl);
-        }
+        self.zp_alu(Self::ora, bus, ctrl);
     }
 
-    // ASL $nn
     fn op_06(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 2 {
-            self.zp(bus);
-        } else {
-            match self.op_cycle {
-                2 => {
-                    bus.write(bus.addr, bus.data); // dummy write
-                }
-                3 => {
-                    bus.write(bus.addr, self.asl(bus.data));
-                    self.poll_intg(ctrl);
-                }
-                4 => {
-                    self.fetch(bus, ctrl);
-                }
-                _ => unreachable!(),
-            }
-        }
+        self.zp_rmw(Self::asl, bus, ctrl);
     }
 
-    // SLO $nn
     fn op_07(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 2 {
-            self.zp(bus);
-        } else {
-            match self.op_cycle {
-                2 => {
-                    bus.write(bus.addr, bus.data); // dummy write
-                }
-                3 => {
-                    let data = self.asl(bus.data);
-                    bus.write(bus.addr, data);
-                    self.ora(data);
-                    self.poll_intg(ctrl);
-                }
-                4 => {
-                    self.fetch(bus, ctrl);
-                }
-                _ => unreachable!(),
-            }
-        }
+        self.zp_rmw(Self::slo, bus, ctrl);
     }
 
     // PHP
@@ -194,367 +112,96 @@ impl CPU {
         }
     }
 
-    // ORA #nn
     fn op_09(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 => {
-                self.read_pc(bus); // operand
-                self.poll_intg(ctrl);
-            }
-            1 => {
-                self.ora(bus.data);
-                self.fetch(bus, ctrl);
-            }
-            _ => unreachable!(),
-        }
+        self.imm_alu(Self::ora, bus, ctrl);
     }
 
-    // ASLA
     fn op_0a(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 => {
-                bus.read(self.pc); // dummy read
-                self.poll_intg(ctrl);
-            }
-            1 => {
-                self.a = self.asl(self.a);
-                self.fetch(bus, ctrl);
-            }
-            _ => unreachable!(),
-        }
+        self.implicit(|cpu| cpu.a = cpu.asl(cpu.a), bus, ctrl);
     }
 
-    // ANC #nn
     fn op_0b(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 => {
-                self.read_pc(bus); // operand
-                self.poll_intg(ctrl);
-            }
-            1 => {
-                self.and(bus.data);
-                self.flags.update_c(self.a & 0x80 != 0);
-                self.fetch(bus, ctrl);
-            }
-            _ => unreachable!(),
-        }
+        self.imm_alu(Self::anc, bus, ctrl);
     }
 
-    // NOP $nnnn
     fn op_0c(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 3 {
-            self.abs(bus);
-            if self.op_cycle == 2 {
-                self.poll_intg(ctrl);
-            }
-        } else {
-            self.fetch(bus, ctrl);
-        }
+        self.abs_alu(Self::nop, bus, ctrl);
     }
 
-    // ORA $nnnn
     fn op_0d(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 3 {
-            self.abs(bus);
-            if self.op_cycle == 2 {
-                self.poll_intg(ctrl);
-            }
-        } else {
-            self.ora(bus.data);
-            self.fetch(bus, ctrl);
-        }
+        self.abs_alu(Self::ora, bus, ctrl);
     }
 
-    // ASL $nnnn
     fn op_0e(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 3 {
-            self.abs(bus);
-        } else {
-            match self.op_cycle {
-                3 => {
-                    bus.write(bus.addr, bus.data); // dummy write
-                }
-                4 => {
-                    bus.write(bus.addr, self.asl(bus.data));
-                    self.poll_intg(ctrl);
-                }
-                5 => {
-                    self.fetch(bus, ctrl);
-                }
-                _ => unreachable!(),
-            }
-        }
+        self.abs_rmw(Self::asl, bus, ctrl);
     }
 
-    // SLO $nnnn
     fn op_0f(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 3 {
-            self.abs(bus);
-        } else {
-            match self.op_cycle {
-                3 => {
-                    bus.write(bus.addr, bus.data); // dummy write
-                }
-                4 => {
-                    let data = self.asl(bus.data);
-                    bus.write(bus.addr, data);
-                    self.ora(data);
-                    self.poll_intg(ctrl);
-                }
-                5 => {
-                    self.fetch(bus, ctrl);
-                }
-                _ => unreachable!(),
-            }
-        }
+        self.abs_rmw(Self::slo, bus, ctrl);
     }
 
-    // BPL
     fn op_10(&mut self, bus: &mut Bus, ctrl: &mut Control) {
         self.branch(bus, ctrl, !self.flags.n());
     }
 
-    // ORA ($nn),Y
     fn op_11(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 5 {
-            self.izy(bus, false);
-            if self.op_cycle == 4 {
-                self.poll_intg(ctrl);
-            }
-        } else {
-            self.ora(bus.data);
-            self.fetch(bus, ctrl);
-        }
+        self.izy_alu(Self::ora, bus, ctrl);
     }
 
-    // KIL
     fn op_12(&mut self, bus: &mut Bus, ctrl: &mut Control) {
         self.kil(bus, ctrl);
     }
 
-    // SLO $(nn), Y
     fn op_13(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 5 {
-            self.izy(bus, true);
-        } else {
-            match self.op_cycle {
-                5 => {
-                    bus.write(bus.addr, bus.data); // dummy write
-                }
-                6 => {
-                    let data = self.asl(bus.data);
-                    bus.write(bus.addr, data);
-                    self.ora(data);
-                    self.poll_intg(ctrl);
-                }
-                7 => {
-                    self.fetch(bus, ctrl);
-                }
-                _ => unreachable!(),
-            }
-        }
+        self.izy_rmw(Self::slo, bus, ctrl);
     }
 
-    // NOP $nn,X
     fn op_14(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 3 {
-            self.zpi(bus);
-            if self.op_cycle == 2 {
-                self.poll_intg(ctrl);
-            }
-        } else {
-            self.fetch(bus, ctrl);
-        }
+        self.zpi_alu(self.x, Self::nop, bus, ctrl);
     }
 
-    // ORA $nn,X
     fn op_15(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 3 {
-            self.zpi(bus);
-            if self.op_cycle == 2 {
-                self.poll_intg(ctrl);
-            }
-        } else {
-            self.ora(bus.data);
-            self.fetch(bus, ctrl);
-        }
+        self.zpi_alu(self.x, Self::ora, bus, ctrl);
     }
 
-    // ASL $nn,X
     fn op_16(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 3 {
-            self.zpi(bus);
-        } else {
-            match self.op_cycle {
-                3 => {
-                    bus.write(bus.addr, bus.data); // dummy write
-                }
-                4 => {
-                    bus.write(bus.addr, self.asl(bus.data));
-                    self.poll_intg(ctrl);
-                }
-                5 => {
-                    self.fetch(bus, ctrl);
-                }
-                _ => unreachable!(),
-            }
-        }
+        self.zpi_rmw(self.x, Self::asl, bus, ctrl);
     }
 
-    // SLO $nn,X
     fn op_17(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 3 {
-            self.zpi(bus);
-        } else {
-            match self.op_cycle {
-                3 => {
-                    bus.write(bus.addr, bus.data); // dummy write
-                }
-                4 => {
-                    let data = self.asl(bus.data);
-                    bus.write(bus.addr, data);
-                    self.ora(data);
-                    self.poll_intg(ctrl);
-                }
-                5 => {
-                    self.fetch(bus, ctrl);
-                }
-                _ => unreachable!(),
-            }
-        }
+        self.zpi_rmw(self.x, Self::slo, bus, ctrl);
     }
 
-    // CLC
     fn op_18(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 => {
-                bus.read(self.pc); // dummy read
-                self.poll_intg(ctrl);
-            }
-            1 => {
-                self.flags.update_c(false);
-            }
-            _ => unreachable!(),
-        }
+        self.implicit(|cpu| cpu.flags.update_c(false), bus, ctrl);
     }
 
-    // ORA $nnnn,Y
     fn op_19(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 4 {
-            self.abi(bus, self.y, false);
-            if self.op_cycle == 3 {
-                self.poll_intg(ctrl);
-            }
-        } else {
-            self.ora(bus.data);
-            self.fetch(bus, ctrl);
-        }
+        self.abi_alu(self.y, Self::ora, bus, ctrl);
     }
 
-    // NOP
     fn op_1a(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 => {
-                bus.read(self.pc); // dummy read
-                self.poll_intg(ctrl);
-            }
-            1 => {
-                self.fetch(bus, ctrl);
-            }
-            _ => unreachable!(),
-        }
+        self.implicit(|_| {}, bus, ctrl);
     }
 
-    // SLO $nnnn,Y
     fn op_1b(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 4 {
-            self.abi(bus, self.y, true);
-        } else {
-            match self.op_cycle {
-                4 => {
-                    bus.write(bus.addr, bus.data); // dummy write
-                }
-                5 => {
-                    let data = self.asl(bus.data);
-                    bus.write(bus.addr, data);
-                    self.ora(data);
-                    self.poll_intg(ctrl);
-                }
-                6 => {
-                    self.fetch(bus, ctrl);
-                }
-                _ => unreachable!(),
-            }
-        }
+        self.abi_rmw(self.y, Self::slo, bus, ctrl);
     }
 
-    // NOP $nnnn,X
     fn op_1c(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 4 {
-            self.abi(bus, self.x, false);
-            if self.op_cycle == 3 {
-                self.poll_intg(ctrl);
-            }
-        } else {
-            self.fetch(bus, ctrl);
-        }
+        self.abi_alu(self.x, Self::nop, bus, ctrl);
     }
 
-    // ORA $nnnn,X
     fn op_1d(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 4 {
-            self.abi(bus, self.x, false);
-            if self.op_cycle == 3 {
-                self.poll_intg(ctrl);
-            }
-        } else {
-            self.ora(bus.data);
-            self.fetch(bus, ctrl);
-        }
+        self.abi_alu(self.x, Self::ora, bus, ctrl);
     }
 
-    // ASL $nnnn,X
     fn op_1e(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 4 {
-            self.abi(bus, self.x, true);
-        } else {
-            match self.op_cycle {
-                4 => {
-                    bus.write(bus.addr, bus.data); // dummy write
-                }
-                5 => {
-                    bus.write(bus.addr, self.asl(bus.data));
-                    self.poll_intg(ctrl);
-                }
-                6 => {
-                    self.fetch(bus, ctrl);
-                }
-                _ => unreachable!(),
-            }
-        }
+        self.abi_rmw(self.x, Self::asl, bus, ctrl);
     }
 
-    // SLO $nnnn,X
     fn op_1f(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        if self.op_cycle < 4 {
-            self.abi(bus, self.x, true);
-        } else {
-            match self.op_cycle {
-                4 => {
-                    bus.write(bus.addr, bus.data); // dummy write
-                }
-                5 => {
-                    let data = self.asl(bus.data);
-                    bus.write(bus.addr, data);
-                    self.ora(data);
-                    self.poll_intg(ctrl);
-                }
-                6 => {
-                    self.fetch(bus, ctrl);
-                }
-                _ => unreachable!(),
-            }
-        }
+        self.abi_rmw(self.x, Self::slo, bus, ctrl);
     }
 
     // JSR
@@ -565,7 +212,7 @@ impl CPU {
             }
             1 => {
                 self.vector = bus.data as u16;
-                bus.read(self.sp as u16 | 0x100); // dummy read
+                self.read_sp(bus); // dummy read
             }
             2 => {
                 self.write_sp(bus, (self.pc >> 8) as u8);
@@ -584,471 +231,149 @@ impl CPU {
             _ => unreachable!(),
         }
     }
-    fn op_21(&mut self) {
+
+    fn op_21(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.izx_alu(Self::and, bus, ctrl);
+    }
+
+    fn op_22(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.kil(bus, ctrl);
+    }
+
+    fn op_23(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.izx_rmw(Self::rla, bus, ctrl);
+    }
+
+    fn op_24(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.zp_alu(Self::bit, bus, ctrl);
+    }
+
+    fn op_25(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.zp_alu(Self::and, bus, ctrl);
+    }
+
+    fn op_26(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.zp_rmw(Self::rol, bus, ctrl);
+    }
+
+    fn op_27(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.zp_rmw(Self::rla, bus, ctrl);
+    }
+
+    // PLP
+    fn op_28(&mut self, bus: &mut Bus, ctrl: &mut Control) {
         match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
+            0 => {
+                bus.read(self.pc); // dummy read
             }
+            1 => {
+                self.read_sp(bus); // dummy read
+                self.sp = self.sp.wrapping_add(1);
+            }
+            2 => {
+                self.read_sp(bus); // data
+                self.poll_intg(ctrl);
+            }
+            3 => {
+                self.flags.set_from(bus.data, 0b11111111);
+                self.fetch(bus, ctrl);
+            }
+            _ => unreachable!(),
         }
     }
-    fn op_22(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_29(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.imm_alu(Self::and, bus, ctrl);
     }
-    fn op_23(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_2a(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.implicit(|cpu| cpu.a = cpu.rol(cpu.a), bus, ctrl);
     }
-    fn op_24(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_2b(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.imm_alu(Self::anc, bus, ctrl);
     }
-    fn op_25(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_2c(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.abs_alu(Self::bit, bus, ctrl);
     }
-    fn op_26(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_2d(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.abs_alu(Self::and, bus, ctrl);
     }
-    fn op_27(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_2e(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.abs_rmw(Self::rol, bus, ctrl);
     }
-    fn op_28(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_2f(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.abs_rmw(Self::rla, bus, ctrl);
     }
-    fn op_29(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_30(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.branch(bus, ctrl, self.flags.n());
     }
-    fn op_2a(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_31(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.izy_alu(Self::and, bus, ctrl);
     }
-    fn op_2b(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_32(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.kil(bus, ctrl);
     }
-    fn op_2c(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_33(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.izy_rmw(Self::rla, bus, ctrl);
     }
-    fn op_2d(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_34(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.zpi_alu(self.x, Self::nop, bus, ctrl);
     }
-    fn op_2e(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_35(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.zpi_alu(self.x, Self::and, bus, ctrl);
     }
-    fn op_2f(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_36(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.zpi_rmw(self.x, Self::rol, bus, ctrl);
     }
-    fn op_30(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_37(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.zpi_rmw(self.x, Self::rla, bus, ctrl);
     }
-    fn op_31(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_38(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.implicit(|cpu| cpu.flags.update_c(true), bus, ctrl);
     }
-    fn op_32(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_39(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.abi_alu(self.y, Self::and, bus, ctrl);
     }
-    fn op_33(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_3a(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.implicit(|_| {}, bus, ctrl);
     }
-    fn op_34(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_3b(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.abi_rmw(self.y, Self::rla, bus, ctrl);
     }
-    fn op_35(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_3c(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.abi_alu(self.x, Self::nop, bus, ctrl);
     }
-    fn op_36(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_3d(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.abi_alu(self.x, Self::and, bus, ctrl);
     }
-    fn op_37(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_3e(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.abi_rmw(self.x, Self::rol, bus, ctrl);
     }
-    fn op_38(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
+
+    fn op_3f(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+        self.abi_rmw(self.x, Self::rla, bus, ctrl);
     }
-    fn op_39(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
-    }
-    fn op_3a(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
-    }
-    fn op_3b(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
-    }
-    fn op_3c(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
-    }
-    fn op_3d(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
-    }
-    fn op_3e(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
-    }
-    fn op_3f(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
-    }
+
     fn op_40(&mut self) {
         match self.op_cycle {
             0 => {}
@@ -3964,35 +3289,35 @@ impl CPU {
             0x1d => self.op_1d(bus, ctrl),
             0x1e => self.op_1e(bus, ctrl),
             0x1f => self.op_1f(bus, ctrl),
-            0x20 => self.op_20(),
-            0x21 => self.op_21(),
-            0x22 => self.op_22(),
-            0x23 => self.op_23(),
-            0x24 => self.op_24(),
-            0x25 => self.op_25(),
-            0x26 => self.op_26(),
-            0x27 => self.op_27(),
-            0x28 => self.op_28(),
-            0x29 => self.op_29(),
-            0x2a => self.op_2a(),
-            0x2b => self.op_2b(),
-            0x2c => self.op_2c(),
-            0x2d => self.op_2d(),
-            0x2e => self.op_2e(),
-            0x2f => self.op_2f(),
-            0x30 => self.op_30(),
-            0x31 => self.op_31(),
-            0x32 => self.op_32(),
-            0x33 => self.op_33(),
-            0x34 => self.op_34(),
-            0x35 => self.op_35(),
-            0x36 => self.op_36(),
-            0x37 => self.op_37(),
-            0x38 => self.op_38(),
-            0x39 => self.op_39(),
-            0x3a => self.op_3a(),
-            0x3b => self.op_3b(),
-            0x3c => self.op_3c(),
+            0x20 => self.op_20(bus, ctrl),
+            0x21 => self.op_21(bus, ctrl),
+            0x22 => self.op_22(bus, ctrl),
+            0x23 => self.op_23(bus, ctrl),
+            0x24 => self.op_24(bus, ctrl),
+            0x25 => self.op_25(bus, ctrl),
+            0x26 => self.op_26(bus, ctrl),
+            0x27 => self.op_27(bus, ctrl),
+            0x28 => self.op_28(bus, ctrl),
+            0x29 => self.op_29(bus, ctrl),
+            0x2a => self.op_2a(bus, ctrl),
+            0x2b => self.op_2b(bus, ctrl),
+            0x2c => self.op_2c(bus, ctrl),
+            0x2d => self.op_2d(bus, ctrl),
+            0x2e => self.op_2e(bus, ctrl),
+            0x2f => self.op_2f(bus, ctrl),
+            0x30 => self.op_30(bus, ctrl),
+            0x31 => self.op_31(bus, ctrl),
+            0x32 => self.op_32(bus, ctrl),
+            0x33 => self.op_33(bus, ctrl),
+            0x34 => self.op_34(bus, ctrl),
+            0x35 => self.op_35(bus, ctrl),
+            0x36 => self.op_36(bus, ctrl),
+            0x37 => self.op_37(bus, ctrl),
+            0x38 => self.op_38(bus, ctrl),
+            0x39 => self.op_39(bus, ctrl),
+            0x3a => self.op_3a(bus, ctrl),
+            0x3b => self.op_3b(bus, ctrl),
+            0x3c => self.op_3c(bus, ctrl),
             0x3d => self.op_3d(),
             0x3e => self.op_3e(),
             0x3f => self.op_3f(),
@@ -4192,6 +3517,271 @@ impl CPU {
     }
 }
 
+// Common operations
+impl CPU {
+    fn implicit<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    where
+        F: Fn(&mut Self),
+    {
+        match self.op_cycle {
+            0 => {
+                bus.read(self.pc); // dummy read
+                self.poll_intg(ctrl);
+            }
+            1 => {
+                op(self);
+                self.fetch(bus, ctrl);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn imm_alu<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    where
+        F: Fn(&mut Self, u8),
+    {
+        match self.op_cycle {
+            0 => {
+                self.read_pc(bus); // operand
+                self.poll_intg(ctrl);
+            }
+            1 => {
+                op(self, bus.data);
+                self.fetch(bus, ctrl);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn zp_alu<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    where
+        F: Fn(&mut Self, u8),
+    {
+        if self.op_cycle < 2 {
+            self.zp(bus);
+            if self.op_cycle == 1 {
+                self.poll_intg(ctrl);
+            }
+        } else {
+            op(self, bus.data);
+            self.fetch(bus, ctrl);
+        }
+    }
+
+    fn zp_rmw<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    where
+        F: Fn(&mut Self, u8) -> u8,
+    {
+        if self.op_cycle < 2 {
+            self.zp(bus);
+        } else {
+            match self.op_cycle {
+                2 => {
+                    bus.write(bus.addr, bus.data); // dummy write
+                }
+                3 => {
+                    bus.write(bus.addr, op(self, bus.data));
+                    self.poll_intg(ctrl);
+                }
+                4 => {
+                    self.fetch(bus, ctrl);
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    fn abs_alu<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    where
+        F: Fn(&mut Self, u8),
+    {
+        if self.op_cycle < 3 {
+            self.abs(bus);
+            if self.op_cycle == 2 {
+                self.poll_intg(ctrl);
+            }
+        } else {
+            op(self, bus.data);
+            self.fetch(bus, ctrl);
+        }
+    }
+
+    fn abs_rmw<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    where
+        F: Fn(&mut Self, u8) -> u8,
+    {
+        if self.op_cycle < 3 {
+            self.abs(bus);
+        } else {
+            match self.op_cycle {
+                3 => {
+                    bus.write(bus.addr, bus.data); // dummy write
+                }
+                4 => {
+                    bus.write(bus.addr, op(self, bus.data));
+                    self.poll_intg(ctrl);
+                }
+                5 => {
+                    self.fetch(bus, ctrl);
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    fn zpi_alu<F>(&mut self, reg: u8, op: F, bus: &mut Bus, ctrl: &mut Control)
+    where
+        F: Fn(&mut Self, u8),
+    {
+        if self.op_cycle < 3 {
+            self.zpi(bus, reg);
+            if self.op_cycle == 2 {
+                self.poll_intg(ctrl);
+            }
+        } else {
+            op(self, bus.data);
+            self.fetch(bus, ctrl);
+        }
+    }
+
+    fn zpi_rmw<F>(&mut self, reg: u8, op: F, bus: &mut Bus, ctrl: &mut Control)
+    where
+        F: Fn(&mut Self, u8) -> u8,
+    {
+        if self.op_cycle < 3 {
+            self.zpi(bus, reg);
+        } else {
+            match self.op_cycle {
+                3 => {
+                    bus.write(bus.addr, bus.data); // dummy write
+                }
+                4 => {
+                    bus.write(bus.addr, op(self, bus.data));
+                    self.poll_intg(ctrl);
+                }
+                5 => {
+                    self.fetch(bus, ctrl);
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    fn abi_alu<F>(&mut self, reg: u8, op: F, bus: &mut Bus, ctrl: &mut Control)
+    where
+        F: Fn(&mut Self, u8),
+    {
+        if self.op_cycle < 4 {
+            self.abi(bus, reg, false);
+            if self.op_cycle == 3 {
+                self.poll_intg(ctrl);
+            }
+        } else {
+            op(self, bus.data);
+            self.fetch(bus, ctrl);
+        }
+    }
+
+    fn abi_rmw<F>(&mut self, reg: u8, op: F, bus: &mut Bus, ctrl: &mut Control)
+    where
+        F: Fn(&mut Self, u8) -> u8,
+    {
+        if self.op_cycle < 4 {
+            self.abi(bus, reg, true);
+        } else {
+            match self.op_cycle {
+                4 => {
+                    bus.write(bus.addr, bus.data); // dummy write
+                }
+                5 => {
+                    bus.write(bus.addr, op(self, bus.data));
+                    self.poll_intg(ctrl);
+                }
+                6 => {
+                    self.fetch(bus, ctrl);
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    fn izx_alu<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    where
+        F: Fn(&mut Self, u8),
+    {
+        if self.op_cycle < 5 {
+            self.izx(bus);
+            if self.op_cycle == 4 {
+                self.poll_intg(ctrl);
+            }
+        } else {
+            op(self, bus.data);
+            self.fetch(bus, ctrl);
+        }
+    }
+
+    fn izx_rmw<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    where
+        F: Fn(&mut Self, u8) -> u8,
+    {
+        if self.op_cycle < 5 {
+            self.izx(bus);
+        } else {
+            match self.op_cycle {
+                5 => {
+                    bus.write(bus.addr, bus.data); // dummy write
+                }
+                6 => {
+                    bus.write(bus.addr, op(self, bus.data));
+                    self.poll_intg(ctrl);
+                }
+                7 => {
+                    self.fetch(bus, ctrl);
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    fn izy_alu<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    where
+        F: Fn(&mut Self, u8),
+    {
+        if self.op_cycle < 5 {
+            self.izy(bus, false);
+            if self.op_cycle == 4 {
+                self.poll_intg(ctrl);
+            }
+        } else {
+            op(self, bus.data);
+            self.fetch(bus, ctrl);
+        }
+    }
+
+    fn izy_rmw<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    where
+        F: Fn(&mut Self, u8) -> u8,
+    {
+        if self.op_cycle < 5 {
+            self.izy(bus, true);
+        } else {
+            match self.op_cycle {
+                5 => {
+                    bus.write(bus.addr, bus.data); // dummy write
+                }
+                6 => {
+                    bus.write(bus.addr, op(self, bus.data));
+                    self.poll_intg(ctrl);
+                }
+                7 => {
+                    self.fetch(bus, ctrl);
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+}
+
 // Address modes.
 impl CPU {
     fn zp(&mut self, bus: &mut Bus) {
@@ -4222,13 +3812,13 @@ impl CPU {
         }
     }
 
-    fn zpi(&mut self, bus: &mut Bus) {
+    fn zpi(&mut self, bus: &mut Bus, reg: u8) {
         match self.op_cycle {
             0 => {
                 self.read_pc(bus); // base zero-page address
             }
             1 => {
-                self.vector = add_without_carry(bus.data as u16, self.x);
+                self.vector = add_without_carry(bus.data as u16, reg);
                 bus.read(bus.data as u16); // dummy read
             }
             2 => {
@@ -4370,12 +3960,7 @@ impl CPU {
 
 // ALU instructions.
 impl CPU {
-    fn asl(&mut self, data: u8) -> u8 {
-        let val = data.wrapping_shl(1);
-        self.flags.set_nz(val);
-        self.flags.update_c(data & 0x80 != 0);
-        val
-    }
+    fn nop(&mut self, _: u8) {}
 
     fn and(&mut self, data: u8) {
         self.a &= data;
@@ -4385,5 +3970,41 @@ impl CPU {
     fn ora(&mut self, data: u8) {
         self.a |= data;
         self.flags.set_nz(self.a);
+    }
+
+    fn bit(&mut self, data: u8) {
+        self.flags.set_z(self.a & data);
+        self.flags.set_from(data, 0b11000000);
+    }
+
+    fn anc(&mut self, data: u8) {
+        self.and(data);
+        self.flags.update_c(self.a & 0x80 != 0);
+    }
+
+    fn asl(&mut self, data: u8) -> u8 {
+        let val = data.wrapping_shl(1);
+        self.flags.set_nz(val);
+        self.flags.update_c(data & 0x80 != 0);
+        val
+    }
+
+    fn rol(&mut self, data: u8) -> u8 {
+        let val = data.wrapping_shl(1) | data >> 7;
+        self.flags.set_nz(val);
+        self.flags.update_c(data & 0x80 != 0);
+        val
+    }
+
+    fn rla(&mut self, data: u8) -> u8 {
+        let val = self.rol(data);
+        self.and(val);
+        val
+    }
+
+    fn slo(&mut self, data: u8) -> u8 {
+        let val = self.asl(data);
+        self.ora(val);
+        val
     }
 }

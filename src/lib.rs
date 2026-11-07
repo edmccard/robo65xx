@@ -113,6 +113,14 @@ impl Flags {
         self.0 & 0b00000010 != 0
     }
 
+    fn set_z(&mut self, v: u8) {
+        if v == 0 {
+            self.0 |= 0b00000010;
+        } else {
+            self.0 &= 0b11111101;
+        }
+    }
+
     pub fn c(&self) -> bool {
         self.0 & 0b00000001 != 0
     }
@@ -125,12 +133,16 @@ impl Flags {
         }
     }
 
-    pub fn set_nz(&mut self, val: u8) {
+    fn set_nz(&mut self, val: u8) {
         self.0 &= val & 0b01111101;
         self.0 |= val & 0b10000000;
         if val == 0 {
             self.0 |= 0b00000010;
         }
+    }
+
+    fn set_from(&mut self, val: u8, mask: u8) {
+        self.0 = self.0 & !mask | val & mask | 0b00110000;
     }
 }
 
@@ -249,10 +261,8 @@ impl CPU {
     }
 
     // Read from the stack.
-    // `inc` should only be false when called from BRK while reset is true.
     fn read_sp(&mut self, bus: &mut Bus) {
         bus.read(self.sp as u16 | 0x100);
-        self.sp = self.sp.wrapping_add(1);
     }
 
     // Write to the stack and decrement the stack pointer.
