@@ -89,8 +89,21 @@ impl Flags {
         self.0 & 0b10000000 != 0
     }
 
+    fn set_n(&mut self, val: u8) {
+        self.0 &= val & 0b01111111;
+        self.0 |= val & 0b10000000;
+    }
+
     pub fn v(&self) -> bool {
         self.0 & 0b01000000 != 0
+    }
+
+    fn update_v(&mut self, bit: bool) {
+        if bit {
+            self.0 |= 0b01000000;
+        } else {
+            self.0 &= 0b10111111;
+        }
     }
 
     pub fn d(&self) -> bool {
@@ -101,8 +114,8 @@ impl Flags {
         self.0 & 0b00000100 != 0
     }
 
-    fn update_i(&mut self, v: bool) {
-        if v {
+    fn update_i(&mut self, bit: bool) {
+        if bit {
             self.0 |= 0b00000100;
         } else {
             self.0 &= 0b11111011;
@@ -113,8 +126,8 @@ impl Flags {
         self.0 & 0b00000010 != 0
     }
 
-    fn set_z(&mut self, v: u8) {
-        if v == 0 {
+    fn set_z(&mut self, val: u8) {
+        if val == 0 {
             self.0 |= 0b00000010;
         } else {
             self.0 &= 0b11111101;
@@ -125,8 +138,8 @@ impl Flags {
         self.0 & 0b00000001 != 0
     }
 
-    fn update_c(&mut self, v: bool) {
-        if v {
+    fn update_c(&mut self, bit: bool) {
+        if bit {
             self.0 |= 0b00000001;
         } else {
             self.0 &= 0b11111110;
