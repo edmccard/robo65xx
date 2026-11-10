@@ -306,11 +306,11 @@ impl CPU {
                 bus.read(cpu.pc); // dummy read
                 cpu.poll_intg(ctrl);
             }
-            1 => {
+            _ => {
+                debug_assert_eq!(1, cpu.op_cycle);
                 op(cpu);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -323,11 +323,11 @@ impl CPU {
                 cpu.read_pc(bus); // operand
                 cpu.poll_intg(ctrl);
             }
-            1 => {
+            _ => {
+                debug_assert_eq!(1, cpu.op_cycle);
                 op(cpu, bus.data);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -343,11 +343,11 @@ impl CPU {
                 bus.read(bus.data as u16); // operand
                 cpu.poll_intg(ctrl);
             }
-            2 => {
+            _ => {
+                debug_assert_eq!(2, cpu.op_cycle);
                 op(cpu, bus.data);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -360,10 +360,10 @@ impl CPU {
                 bus.write(bus.data as u16, src);
                 cpu.poll_intg(ctrl);
             }
-            2 => {
+            _ => {
+                debug_assert_eq!(2, cpu.op_cycle);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -385,10 +385,10 @@ impl CPU {
                 bus.write(bus.addr, op(cpu, bus.data));
                 cpu.poll_intg(ctrl);
             }
-            4 => {
+            _ => {
+                debug_assert_eq!(4, cpu.op_cycle);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -408,11 +408,11 @@ impl CPU {
                 bus.read((bus.data as u16).wrapping_shl(8) | cpu.vector); // operand
                 cpu.poll_intg(ctrl);
             }
-            3 => {
+            _ => {
+                debug_assert_eq!(3, cpu.op_cycle);
                 op(cpu, bus.data);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -429,10 +429,10 @@ impl CPU {
                 bus.write((bus.data as u16).wrapping_shl(8) | cpu.vector, src);
                 cpu.poll_intg(ctrl);
             }
-            3 => {
+            _ => {
+                debug_assert_eq!(3, cpu.op_cycle);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -458,10 +458,10 @@ impl CPU {
                 bus.write(bus.addr, op(cpu, bus.data));
                 cpu.poll_intg(ctrl);
             }
-            5 => {
+            _ => {
+                debug_assert_eq!(5, cpu.op_cycle);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -481,11 +481,11 @@ impl CPU {
                 bus.read(cpu.vector); // operand
                 cpu.poll_intg(ctrl);
             }
-            3 => {
+            _ => {
+                debug_assert_eq!(3, cpu.op_cycle);
                 op(cpu, bus.data);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -502,10 +502,10 @@ impl CPU {
                 bus.write(cpu.vector, src); // operand
                 cpu.poll_intg(ctrl);
             }
-            3 => {
+            _ => {
+                debug_assert_eq!(3, cpu.op_cycle);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -531,10 +531,10 @@ impl CPU {
                 bus.write(bus.addr, op(cpu, bus.data));
                 cpu.poll_intg(ctrl);
             }
-            5 => {
+            _ => {
+                debug_assert_eq!(5, cpu.op_cycle);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -564,11 +564,11 @@ impl CPU {
                 bus.read(cpu.vector.wrapping_add(idx as u16)); // operand
                 cpu.poll_intg(ctrl);
             }
-            4 => {
+            _ => {
+                debug_assert_eq!(4, cpu.op_cycle);
                 op(cpu, bus.data);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -589,10 +589,10 @@ impl CPU {
                 bus.write(cpu.vector.wrapping_add(idx as u16), src);
                 cpu.poll_intg(ctrl);
             }
-            4 => {
+            _ => {
+                debug_assert_eq!(4, cpu.op_cycle);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -622,10 +622,10 @@ impl CPU {
                 bus.write(bus.addr, op(cpu, bus.data));
                 cpu.poll_intg(ctrl);
             }
-            6 => {
+            _ => {
+                debug_assert_eq!(6, cpu.op_cycle);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -652,11 +652,11 @@ impl CPU {
                 bus.read((bus.data as u16).wrapping_shl(8) | cpu.vector); // operand
                 cpu.poll_intg(ctrl);
             }
-            5 => {
+            _ => {
+                debug_assert_eq!(5, cpu.op_cycle);
                 op(cpu, bus.data);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -680,10 +680,10 @@ impl CPU {
                 bus.write((bus.data as u16).wrapping_shl(8) | cpu.vector, src); // operand
                 cpu.poll_intg(ctrl);
             }
-            5 => {
+            _ => {
+                debug_assert_eq!(5, cpu.op_cycle);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -716,10 +716,10 @@ impl CPU {
                 bus.write(bus.addr, op(cpu, bus.data));
                 cpu.poll_intg(ctrl);
             }
-            7 => {
+            _ => {
+                debug_assert_eq!(7, cpu.op_cycle);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -753,11 +753,11 @@ impl CPU {
                 bus.read(cpu.vector.wrapping_add(cpu.y as u16)); // operand
                 cpu.poll_intg(ctrl);
             }
-            5 => {
+            _ => {
+                debug_assert_eq!(5, cpu.op_cycle);
                 op(cpu, bus.data);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -782,10 +782,10 @@ impl CPU {
                 bus.write(cpu.vector.wrapping_add(cpu.y as u16), src); // operand
                 cpu.poll_intg(ctrl);
             }
-            5 => {
+            _ => {
+                debug_assert_eq!(5, cpu.op_cycle);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -819,10 +819,10 @@ impl CPU {
                 bus.write(bus.addr, op(cpu, bus.data));
                 cpu.poll_intg(ctrl);
             }
-            7 => {
+            _ => {
+                debug_assert_eq!(7, cpu.op_cycle);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 }
@@ -833,6 +833,24 @@ impl CPU {
 
     fn lda(cpu: &mut Self, data: u8) {
         cpu.a = data;
+        cpu.flags.set_nz(cpu.a);
+    }
+
+    fn ldx(cpu: &mut Self, data: u8) {
+        cpu.x = data;
+        cpu.flags.set_nz(cpu.x);
+    }
+
+    fn lax(cpu: &mut Self, data: u8) {
+        cpu.x = data;
+        cpu.a = data;
+        cpu.flags.set_nz(cpu.x);
+    }
+
+    fn las(cpu: &mut Self, data: u8) {
+        cpu.sp &= data;
+        cpu.a = cpu.sp;
+        cpu.x = cpu.sp;
         cpu.flags.set_nz(cpu.a);
     }
 
@@ -859,6 +877,21 @@ impl CPU {
     fn bit(cpu: &mut Self, data: u8) {
         cpu.flags.set_z(cpu.a & data);
         cpu.flags.set_from(data, 0b11000000);
+    }
+
+    fn cmp(cpu: &mut Self, data: u8) {
+        cpu.flags.set_nz(cpu.a.wrapping_sub(data));
+        cpu.flags.update_c(data <= cpu.a);
+    }
+
+    fn cpx(cpu: &mut Self, data: u8) {
+        cpu.flags.set_nz(cpu.x.wrapping_sub(data));
+        cpu.flags.update_c(data <= cpu.x);
+    }
+
+    fn cpy(cpu: &mut Self, data: u8) {
+        cpu.flags.set_nz(cpu.y.wrapping_sub(data));
+        cpu.flags.update_c(data <= cpu.y);
     }
 
     fn anc(cpu: &mut Self, data: u8) {
@@ -939,10 +972,6 @@ impl CPU {
         cpu.flags
             .update_v((data & 0x40) ^ ((data & 0x20) << 1) != 0);
         cpu.a = data;
-    }
-
-    fn xaa(cpu: &mut Self, data: u8) {
-        CPU::lda(cpu, (cpu.a | 0xef) & cpu.x & data);
     }
 
     fn asl(cpu: &mut Self, data: u8) -> u8 {
@@ -1028,11 +1057,11 @@ impl CPU {
                     cpu.poll_intg(ctrl);
                 }
             }
-            3 => {
+            _ => {
+                debug_assert_eq!(3, cpu.op_cycle);
                 cpu.pc = cpu.vector;
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -1109,11 +1138,11 @@ impl CPU {
                 bus.read(cpu.vector.wrapping_add(1)); // high byte of target
                 cpu.vector = vec_lo;
             }
-            6 => {
+            _ => {
+                debug_assert_eq!(6, cpu.op_cycle);
                 cpu.pc = (bus.data as u16).wrapping_shl(8) | cpu.vector;
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -1140,11 +1169,11 @@ impl CPU {
                 cpu.read_sp(bus); // high byte of return address
                 cpu.poll_intg(ctrl);
             }
-            5 => {
+            _ => {
+                debug_assert_eq!(5, cpu.op_cycle);
                 cpu.pc = (bus.data as u16).wrapping_shl(8) | cpu.vector;
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -1158,11 +1187,11 @@ impl CPU {
                 cpu.read_pc(bus); // high byte of target address
                 cpu.poll_intg(ctrl);
             }
-            2 => {
+            _ => {
+                debug_assert_eq!(2, cpu.op_cycle);
                 cpu.pc = (bus.data as u16).wrapping_shl(8) | cpu.vector;
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -1184,11 +1213,11 @@ impl CPU {
                 cpu.vector = bus.data as u16;
                 cpu.poll_intg(ctrl);
             }
-            4 => {
+            _ => {
+                debug_assert_eq!(4, cpu.op_cycle);
                 cpu.pc = (bus.data as u16).wrapping_shl(8) | cpu.vector;
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -1211,11 +1240,11 @@ impl CPU {
                 bus.read(cpu.pc); // high byte of target
                 cpu.poll_intg(ctrl);
             }
-            5 => {
+            _ => {
+                debug_assert_eq!(5, cpu.op_cycle);
                 cpu.pc = (bus.data as u16).wrapping_shl(8) | cpu.vector;
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -1241,10 +1270,10 @@ impl CPU {
                 cpu.read_pc(bus); // dummy read
                 cpu.poll_intg(ctrl);
             }
-            5 => {
+            _ => {
+                debug_assert_eq!(5, cpu.op_cycle);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 }
@@ -1260,10 +1289,10 @@ impl CPU {
                 cpu.write_sp(bus, cpu.a);
                 cpu.poll_intg(ctrl);
             }
-            2 => {
+            _ => {
+                debug_assert_eq!(2, cpu.op_cycle);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -1280,12 +1309,12 @@ impl CPU {
                 cpu.read_sp(bus); // data
                 cpu.poll_intg(ctrl);
             }
-            3 => {
+            _ => {
+                debug_assert_eq!(3, cpu.op_cycle);
                 cpu.a = bus.data;
                 cpu.flags.set_nz(cpu.a);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -1298,10 +1327,10 @@ impl CPU {
                 cpu.write_sp(bus, cpu.flags.0 | 0b0011_0000);
                 cpu.poll_intg(ctrl);
             }
-            2 => {
+            _ => {
+                debug_assert_eq!(2, cpu.op_cycle);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -1318,27 +1347,27 @@ impl CPU {
                 cpu.read_sp(bus); // data
                 cpu.poll_intg(ctrl);
             }
-            3 => {
+            _ => {
+                debug_assert_eq!(3, cpu.op_cycle);
                 cpu.flags.set_from(bus.data, 0b11111111);
                 cpu.fetch(bus, ctrl);
             }
-            _ => unreachable!(),
         }
     }
 }
 
-// Unstable address high-byte opcodes.
+// Opcodes that depend on the state of RDY.
 impl CPU {
     fn ahx_izy(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 | 1 | 2 | 3 | 5 => {
                 CPU::izy_store(0, cpu, bus, ctrl);
             }
-            4 => {
+            _ => {
+                debug_assert_eq!(4, cpu.op_cycle);
                 CPU::unstable_high_byte(|c| c.a & c.x, cpu.y, cpu, bus);
                 cpu.poll_intg(ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -1347,19 +1376,12 @@ impl CPU {
             0 | 1 | 2 | 4 => {
                 CPU::abi_store(cpu.y, 0, cpu, bus, ctrl);
             }
-            3 => {
-                CPU::unstable_high_byte(
-                    |c| {
-                        c.sp = c.a & c.x;
-                        c.sp
-                    },
-                    cpu.y,
-                    cpu,
-                    bus,
-                );
+            _ => {
+                debug_assert_eq!(3, cpu.op_cycle);
+                cpu.sp = cpu.a & cpu.x;
+                CPU::unstable_high_byte(|c| c.sp, cpu.y, cpu, bus);
                 cpu.poll_intg(ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -1368,11 +1390,11 @@ impl CPU {
             0 | 1 | 2 | 4 => {
                 CPU::abi_store(cpu.x, 0, cpu, bus, ctrl);
             }
-            3 => {
+            _ => {
+                debug_assert_eq!(3, cpu.op_cycle);
                 CPU::unstable_high_byte(|c| c.y, cpu.x, cpu, bus);
                 cpu.poll_intg(ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -1381,11 +1403,11 @@ impl CPU {
             0 | 1 | 2 | 4 => {
                 CPU::abi_store(cpu.y, 0, cpu, bus, ctrl);
             }
-            3 => {
+            _ => {
+                debug_assert_eq!(3, cpu.op_cycle);
                 CPU::unstable_high_byte(|c| c.x, cpu.y, cpu, bus);
                 cpu.poll_intg(ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -1394,11 +1416,11 @@ impl CPU {
             0 | 1 | 2 | 4 => {
                 CPU::abi_store(cpu.y, 0, cpu, bus, ctrl);
             }
-            3 => {
+            _ => {
+                debug_assert_eq!(3, cpu.op_cycle);
                 CPU::unstable_high_byte(|c| c.a, cpu.y, cpu, bus);
                 cpu.poll_intg(ctrl);
             }
-            _ => unreachable!(),
         }
     }
 
@@ -1412,6 +1434,21 @@ impl CPU {
             bus.write((val as u16) << 8 | bus.addr & 0xff, val);
         } else {
             bus.write(bus.addr, val);
+        }
+    }
+
+    fn xaa(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
+            0 => {
+                bus.read(cpu.pc); // dummy read
+                cpu.poll_intg(ctrl);
+            }
+            _ => {
+                debug_assert_eq!(1, cpu.op_cycle);
+                // TODO: 0xee if RDY
+                CPU::lda(cpu, (cpu.a | 0xef) & cpu.x & bus.data);
+                cpu.fetch(bus, ctrl);
+            }
         }
     }
 }
