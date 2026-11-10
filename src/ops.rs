@@ -1,996 +1,6 @@
 use super::*;
 
 impl CPU {
-    // BRK
-    fn op_00(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 => {
-                bus.read(self.pc); // dummy read
-            }
-            1 => {
-                if ctrl.res {
-                    self.read_sp(bus); // dummy read
-                    self.sp = self.sp.wrapping_sub(1);
-                } else {
-                    self.write_sp(bus, (self.pc >> 8) as u8);
-                }
-            }
-            2 => {
-                if ctrl.res {
-                    self.read_sp(bus); // dummy read
-                    self.sp = self.sp.wrapping_sub(1);
-                } else {
-                    self.write_sp(bus, self.pc as u8);
-                }
-            }
-            3 => {
-                // ??? is this here or at end of prev cycle?
-                if ctrl.res {
-                    self.vector = 0xfffc;
-                } else if self.nmi_pending || ctrl.nmi {
-                    self.vector = 0xfffa;
-                } else {
-                    self.vector = 0xfffe;
-                }
-
-                if ctrl.res {
-                    self.read_sp(bus); // dummy read
-                    self.sp = self.sp.wrapping_sub(1);
-                } else if self.intg {
-                    self.write_sp(bus, self.flags.0 & 0b1110_1111);
-                } else {
-                    self.write_sp(bus, self.flags.0 | 0b0011_0000);
-                }
-            }
-            4 => {
-                bus.read(self.vector); // low byte of target
-
-                // ??? is this here or at start of next cycle?
-                self.flags.update_i(true);
-                ctrl.res = false;
-                self.intg = false;
-            }
-            5 => {
-                let vec_lo = bus.data as u16;
-                bus.read(self.vector.wrapping_add(1)); // high byte of target
-                self.vector = vec_lo;
-            }
-            6 => {
-                self.pc = (bus.data as u16).wrapping_shl(8) | self.vector;
-                self.fetch(bus, ctrl);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn op_01(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izx_alu(Self::ora, bus, ctrl);
-    }
-
-    fn op_02(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.kil(bus, ctrl);
-    }
-
-    fn op_03(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izx_rmw(Self::slo, bus, ctrl);
-    }
-
-    fn op_04(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_alu(Self::nop, bus, ctrl);
-    }
-
-    fn op_05(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_alu(Self::ora, bus, ctrl);
-    }
-
-    fn op_06(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_rmw(Self::asl, bus, ctrl);
-    }
-
-    fn op_07(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_rmw(Self::slo, bus, ctrl);
-    }
-
-    // PHP
-    fn op_08(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 => {
-                bus.read(self.pc); // dummy read
-            }
-            1 => {
-                self.write_sp(bus, self.flags.0 | 0b0011_0000);
-                self.poll_intg(ctrl);
-            }
-            2 => {
-                self.fetch(bus, ctrl);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn op_09(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.imm_alu(Self::ora, bus, ctrl);
-    }
-
-    fn op_0a(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.implicit(|cpu| cpu.a = cpu.asl(cpu.a), bus, ctrl);
-    }
-
-    fn op_0b(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.imm_alu(Self::anc, bus, ctrl);
-    }
-
-    fn op_0c(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abs_alu(Self::nop, bus, ctrl);
-    }
-
-    fn op_0d(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abs_alu(Self::ora, bus, ctrl);
-    }
-
-    fn op_0e(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abs_rmw(Self::asl, bus, ctrl);
-    }
-
-    fn op_0f(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abs_rmw(Self::slo, bus, ctrl);
-    }
-
-    fn op_10(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.branch(bus, ctrl, !self.flags.n());
-    }
-
-    fn op_11(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izy_alu(Self::ora, bus, ctrl);
-    }
-
-    fn op_12(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.kil(bus, ctrl);
-    }
-
-    fn op_13(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izy_rmw(Self::slo, bus, ctrl);
-    }
-
-    fn op_14(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_alu(self.x, Self::nop, bus, ctrl);
-    }
-
-    fn op_15(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_alu(self.x, Self::ora, bus, ctrl);
-    }
-
-    fn op_16(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_rmw(self.x, Self::asl, bus, ctrl);
-    }
-
-    fn op_17(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_rmw(self.x, Self::slo, bus, ctrl);
-    }
-
-    fn op_18(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.implicit(|cpu| cpu.flags.update_c(false), bus, ctrl);
-    }
-
-    fn op_19(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_alu(self.y, Self::ora, bus, ctrl);
-    }
-
-    fn op_1a(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.implicit(|_| {}, bus, ctrl);
-    }
-
-    fn op_1b(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_rmw(self.y, Self::slo, bus, ctrl);
-    }
-
-    fn op_1c(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_alu(self.x, Self::nop, bus, ctrl);
-    }
-
-    fn op_1d(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_alu(self.x, Self::ora, bus, ctrl);
-    }
-
-    fn op_1e(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_rmw(self.x, Self::asl, bus, ctrl);
-    }
-
-    fn op_1f(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_rmw(self.x, Self::slo, bus, ctrl);
-    }
-
-    // JSR
-    fn op_20(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 => {
-                self.read_pc(bus); // low byte of target
-            }
-            1 => {
-                self.vector = bus.data as u16;
-                self.read_sp(bus); // dummy read
-            }
-            2 => {
-                self.write_sp(bus, (self.pc >> 8) as u8);
-            }
-            3 => {
-                self.write_sp(bus, self.pc as u8);
-            }
-            4 => {
-                bus.read(self.pc); // high byte of target
-                self.poll_intg(ctrl);
-            }
-            5 => {
-                self.pc = (bus.data as u16).wrapping_shl(8) | self.vector;
-                self.fetch(bus, ctrl);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn op_21(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izx_alu(Self::and, bus, ctrl);
-    }
-
-    fn op_22(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.kil(bus, ctrl);
-    }
-
-    fn op_23(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izx_rmw(Self::rla, bus, ctrl);
-    }
-
-    fn op_24(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_alu(Self::bit, bus, ctrl);
-    }
-
-    fn op_25(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_alu(Self::and, bus, ctrl);
-    }
-
-    fn op_26(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_rmw(Self::rol, bus, ctrl);
-    }
-
-    fn op_27(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_rmw(Self::rla, bus, ctrl);
-    }
-
-    // PLP
-    fn op_28(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 => {
-                bus.read(self.pc); // dummy read
-            }
-            1 => {
-                self.read_sp(bus); // dummy read
-                self.sp = self.sp.wrapping_add(1);
-            }
-            2 => {
-                self.read_sp(bus); // data
-                self.poll_intg(ctrl);
-            }
-            3 => {
-                self.flags.set_from(bus.data, 0b11111111);
-                self.fetch(bus, ctrl);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn op_29(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.imm_alu(Self::and, bus, ctrl);
-    }
-
-    fn op_2a(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.implicit(|cpu| cpu.a = cpu.rol(cpu.a), bus, ctrl);
-    }
-
-    fn op_2b(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.imm_alu(Self::anc, bus, ctrl);
-    }
-
-    fn op_2c(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abs_alu(Self::bit, bus, ctrl);
-    }
-
-    fn op_2d(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abs_alu(Self::and, bus, ctrl);
-    }
-
-    fn op_2e(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abs_rmw(Self::rol, bus, ctrl);
-    }
-
-    fn op_2f(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abs_rmw(Self::rla, bus, ctrl);
-    }
-
-    fn op_30(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.branch(bus, ctrl, self.flags.n());
-    }
-
-    fn op_31(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izy_alu(Self::and, bus, ctrl);
-    }
-
-    fn op_32(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.kil(bus, ctrl);
-    }
-
-    fn op_33(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izy_rmw(Self::rla, bus, ctrl);
-    }
-
-    fn op_34(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_alu(self.x, Self::nop, bus, ctrl);
-    }
-
-    fn op_35(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_alu(self.x, Self::and, bus, ctrl);
-    }
-
-    fn op_36(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_rmw(self.x, Self::rol, bus, ctrl);
-    }
-
-    fn op_37(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_rmw(self.x, Self::rla, bus, ctrl);
-    }
-
-    fn op_38(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.implicit(|cpu| cpu.flags.update_c(true), bus, ctrl);
-    }
-
-    fn op_39(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_alu(self.y, Self::and, bus, ctrl);
-    }
-
-    fn op_3a(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.implicit(|_| {}, bus, ctrl);
-    }
-
-    fn op_3b(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_rmw(self.y, Self::rla, bus, ctrl);
-    }
-
-    fn op_3c(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_alu(self.x, Self::nop, bus, ctrl);
-    }
-
-    fn op_3d(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_alu(self.x, Self::and, bus, ctrl);
-    }
-
-    fn op_3e(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_rmw(self.x, Self::rol, bus, ctrl);
-    }
-
-    fn op_3f(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_rmw(self.x, Self::rla, bus, ctrl);
-    }
-
-    // RTI
-    fn op_40(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 => {
-                bus.read(self.pc); // dummy read
-            }
-            1 => {
-                self.read_sp(bus); // dummy read
-                self.sp = self.sp.wrapping_add(1);
-            }
-            2 => {
-                self.read_sp(bus);
-                self.sp = self.sp.wrapping_add(1);
-            }
-            3 => {
-                self.flags.set_from(bus.data, 0b11111111);
-                self.read_sp(bus); // low byte of return address
-                self.sp = self.sp.wrapping_add(1);
-            }
-            4 => {
-                self.vector = bus.data as u16;
-                self.read_sp(bus); // high byte of return address
-                self.poll_intg(ctrl);
-            }
-            5 => {
-                self.pc = (bus.data as u16).wrapping_shl(8) | self.vector;
-                self.fetch(bus, ctrl);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn op_41(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izx_alu(Self::eor, bus, ctrl);
-    }
-
-    fn op_42(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.kil(bus, ctrl);
-    }
-
-    fn op_43(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izx_rmw(Self::sre, bus, ctrl);
-    }
-
-    fn op_44(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_alu(Self::nop, bus, ctrl);
-    }
-
-    fn op_45(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_alu(Self::eor, bus, ctrl);
-    }
-
-    fn op_46(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_rmw(Self::lsr, bus, ctrl);
-    }
-
-    fn op_47(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_rmw(Self::sre, bus, ctrl);
-    }
-
-    // PHA
-    fn op_48(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 => {
-                bus.read(self.pc); // dummy read
-            }
-            1 => {
-                self.write_sp(bus, self.a);
-                self.poll_intg(ctrl);
-            }
-            2 => {
-                self.fetch(bus, ctrl);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn op_49(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.imm_alu(Self::eor, bus, ctrl);
-    }
-
-    fn op_4a(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.implicit(|cpu| cpu.a = cpu.lsr(cpu.a), bus, ctrl);
-    }
-
-    fn op_4b(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.imm_alu(
-            |cpu, val| {
-                cpu.a &= val;
-                cpu.a = cpu.lsr(cpu.a)
-            },
-            bus,
-            ctrl,
-        );
-    }
-
-    // JMP
-    fn op_4c(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 => {
-                self.read_pc(bus); // low byte of target address
-            }
-            1 => {
-                self.vector = bus.data as u16;
-                self.read_pc(bus); // high byte of target address
-                self.poll_intg(ctrl);
-            }
-            2 => {
-                self.pc = (bus.data as u16).wrapping_shl(8) | self.vector;
-                self.fetch(bus, ctrl);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn op_4d(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abs_alu(Self::eor, bus, ctrl);
-    }
-
-    fn op_4e(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abs_rmw(Self::lsr, bus, ctrl);
-    }
-
-    fn op_4f(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abs_rmw(Self::sre, bus, ctrl);
-    }
-
-    fn op_50(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.branch(bus, ctrl, !self.flags.v());
-    }
-
-    fn op_51(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izy_alu(Self::eor, bus, ctrl);
-    }
-
-    fn op_52(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.kil(bus, ctrl);
-    }
-
-    fn op_53(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izy_rmw(Self::sre, bus, ctrl);
-    }
-
-    fn op_54(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_alu(self.x, Self::nop, bus, ctrl);
-    }
-
-    fn op_55(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_alu(self.x, Self::eor, bus, ctrl);
-    }
-
-    fn op_56(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_rmw(self.x, Self::lsr, bus, ctrl);
-    }
-
-    fn op_57(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_rmw(self.x, Self::sre, bus, ctrl);
-    }
-
-    fn op_58(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.implicit(|cpu| cpu.flags.update_i(false), bus, ctrl);
-    }
-
-    fn op_59(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_alu(self.y, Self::eor, bus, ctrl);
-    }
-
-    fn op_5a(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.implicit(|_| {}, bus, ctrl);
-    }
-
-    fn op_5b(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_rmw(self.y, Self::sre, bus, ctrl);
-    }
-
-    fn op_5c(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_alu(self.x, Self::nop, bus, ctrl);
-    }
-
-    fn op_5d(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_alu(self.x, Self::eor, bus, ctrl);
-    }
-
-    fn op_5e(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_rmw(self.x, Self::lsr, bus, ctrl);
-    }
-
-    fn op_5f(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_rmw(self.x, Self::sre, bus, ctrl);
-    }
-
-    // RTS
-    fn op_60(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 => {
-                bus.read(self.pc); // dummy read
-            }
-            1 => {
-                self.read_sp(bus); // dummy read
-                self.sp = self.sp.wrapping_add(1);
-            }
-            2 => {
-                self.read_sp(bus); // low byte of return address
-                self.sp = self.sp.wrapping_add(1);
-            }
-            3 => {
-                self.vector = bus.data as u16;
-                self.read_sp(bus); // high byte of return address
-            }
-            4 => {
-                self.pc = (bus.data as u16).wrapping_shl(8) | self.vector;
-                self.read_pc(bus); // dummy read
-                self.poll_intg(ctrl);
-            }
-            5 => {
-                self.fetch(bus, ctrl);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn op_61(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izx_alu(Self::adc, bus, ctrl);
-    }
-
-    fn op_62(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.kil(bus, ctrl);
-    }
-
-    fn op_63(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izx_rmw(Self::rra, bus, ctrl);
-    }
-
-    fn op_64(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_alu(Self::nop, bus, ctrl);
-    }
-
-    fn op_65(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_alu(Self::adc, bus, ctrl);
-    }
-
-    fn op_66(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_rmw(Self::ror, bus, ctrl);
-    }
-
-    fn op_67(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_rmw(Self::rra, bus, ctrl);
-    }
-
-    // PLA
-    fn op_68(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 => {
-                bus.read(self.pc); // dummy read
-            }
-            1 => {
-                self.read_sp(bus); // dummy read
-                self.sp = self.sp.wrapping_add(1);
-            }
-            2 => {
-                self.read_sp(bus); // data
-                self.poll_intg(ctrl);
-            }
-            3 => {
-                self.a = bus.data;
-                self.flags.set_nz(self.a);
-                self.fetch(bus, ctrl);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn op_69(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.imm_alu(Self::adc, bus, ctrl);
-    }
-
-    fn op_6a(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.implicit(|cpu| cpu.a = cpu.ror(cpu.a), bus, ctrl);
-    }
-
-    fn op_6b(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.imm_alu(Self::arr, bus, ctrl);
-    }
-
-    // JMP ($nnnn)
-    fn op_6c(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 => {
-                self.read_pc(bus); // low byte of pointer address
-            }
-            1 => {
-                self.vector = bus.data as u16;
-                self.read_pc(bus); // high byte of pointer address
-            }
-            2 => {
-                self.vector = (bus.data as u16).wrapping_shl(8) | self.vector;
-                bus.read(self.vector); // low byte of target address
-            }
-            3 => {
-                bus.read(add_without_carry(self.vector, 1)); // high byte of target address
-                self.vector = bus.data as u16;
-                self.poll_intg(ctrl);
-            }
-            4 => {
-                self.pc = (bus.data as u16).wrapping_shl(8) | self.vector;
-                self.fetch(bus, ctrl);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn op_6d(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abs_alu(Self::adc, bus, ctrl);
-    }
-
-    fn op_6e(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abs_rmw(Self::ror, bus, ctrl);
-    }
-
-    fn op_6f(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abs_rmw(Self::rra, bus, ctrl);
-    }
-
-    fn op_70(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.branch(bus, ctrl, self.flags.v());
-    }
-
-    fn op_71(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izy_alu(Self::adc, bus, ctrl);
-    }
-
-    fn op_72(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.kil(bus, ctrl);
-    }
-
-    fn op_73(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izy_rmw(Self::rra, bus, ctrl);
-    }
-
-    fn op_74(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_alu(self.x, Self::nop, bus, ctrl);
-    }
-
-    fn op_75(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_alu(self.x, Self::adc, bus, ctrl);
-    }
-
-    fn op_76(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_rmw(self.x, Self::ror, bus, ctrl);
-    }
-
-    fn op_77(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_rmw(self.x, Self::rra, bus, ctrl);
-    }
-
-    fn op_78(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.implicit(|cpu| cpu.flags.update_i(true), bus, ctrl);
-    }
-
-    fn op_79(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_alu(self.y, Self::adc, bus, ctrl);
-    }
-
-    fn op_7a(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.implicit(|_| {}, bus, ctrl);
-    }
-
-    fn op_7b(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_rmw(self.y, Self::rra, bus, ctrl);
-    }
-
-    fn op_7c(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_alu(self.x, Self::nop, bus, ctrl);
-    }
-
-    fn op_7d(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_alu(self.x, Self::adc, bus, ctrl);
-    }
-
-    fn op_7e(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_rmw(self.x, Self::ror, bus, ctrl);
-    }
-
-    fn op_7f(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_rmw(self.x, Self::rra, bus, ctrl);
-    }
-
-    fn op_80(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.imm_alu(Self::nop, bus, ctrl);
-    }
-
-    fn op_81(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izx_store(self.a, bus, ctrl);
-    }
-
-    fn op_82(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.imm_alu(Self::nop, bus, ctrl);
-    }
-
-    fn op_83(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izx_store(self.a & self.x, bus, ctrl);
-    }
-
-    fn op_84(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_store(self.y, bus, ctrl);
-    }
-
-    fn op_85(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_store(self.a, bus, ctrl);
-    }
-
-    fn op_86(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_store(self.x, bus, ctrl);
-    }
-
-    fn op_87(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zp_store(self.a & self.x, bus, ctrl);
-    }
-
-    fn op_88(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.implicit(|cpu| cpu.y = cpu.dec(cpu.y), bus, ctrl);
-    }
-
-    fn op_89(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.imm_alu(Self::nop, bus, ctrl);
-    }
-
-    fn op_8a(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.implicit(|cpu| cpu.lda(cpu.x), bus, ctrl);
-    }
-
-    // XAA
-    fn op_8b(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 => {
-                self.read_pc(bus); // operand
-                self.poll_intg(ctrl);
-            }
-            1 => {
-                // TODO: bus.rdy changes constant to 0xee
-                self.lda((self.a | 0xef) & self.x & bus.data);
-                self.fetch(bus, ctrl);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn op_8c(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abs_store(self.y, bus, ctrl);
-    }
-
-    fn op_8d(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abs_store(self.a, bus, ctrl);
-    }
-
-    fn op_8e(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abs_store(self.x, bus, ctrl);
-    }
-
-    fn op_8f(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abs_store(self.a & self.x, bus, ctrl);
-    }
-
-    fn op_90(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.branch(bus, ctrl, !self.flags.c());
-    }
-
-    fn op_91(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.izy_store(self.a, bus, ctrl);
-    }
-
-    fn op_92(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.kil(bus, ctrl);
-    }
-
-    // AHX ($nn),Y
-    fn op_93(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 | 1 | 2 | 3 | 5 => {
-                self.izy_store(0, bus, ctrl);
-            }
-            4 => {
-                // TODO: if rdy, don't & with hi+1?
-                let val = self.a & self.x & ((self.vector >> 8) as u8).wrapping_add(1);
-                if bus.addr != self.vector.wrapping_add(self.y as u16) {
-                    bus.write((val as u16) << 8 | bus.addr & 0xff, val);
-                } else {
-                    bus.write(bus.addr, val);
-                }
-                self.poll_intg(ctrl);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn op_94(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_store(self.x, self.y, bus, ctrl);
-    }
-
-    fn op_95(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_store(self.x, self.a, bus, ctrl);
-    }
-
-    fn op_96(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_store(self.y, self.x, bus, ctrl);
-    }
-
-    fn op_97(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.zpi_store(self.y, self.a & self.x, bus, ctrl);
-    }
-
-    fn op_98(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.implicit(|cpu| cpu.lda(cpu.y), bus, ctrl);
-    }
-
-    fn op_99(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_store(self.y, self.a, bus, ctrl);
-    }
-
-    fn op_9a(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.implicit(|cpu| cpu.sp = cpu.x, bus, ctrl);
-    }
-
-    // TAS $nnnn,Y
-    fn op_9b(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 | 1 | 2 | 4 => {
-                self.abi_store(self.y, 0, bus, ctrl);
-            }
-            3 => {
-                self.sp = self.a & self.x;
-                // TODO: if rdy, don't & with hi+1?
-                let val = self.sp & ((self.vector >> 8) as u8).wrapping_add(1);
-                if bus.addr != self.vector.wrapping_add(self.y as u16) {
-                    bus.write((val as u16) << 8 | bus.addr & 0xff, val);
-                } else {
-                    bus.write(bus.addr, val);
-                }
-                self.poll_intg(ctrl);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    // SHY $nnnn,X
-    fn op_9c(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 | 1 | 2 | 4 => {
-                self.abi_store(self.x, 0, bus, ctrl);
-            }
-            3 => {
-                // TODO: if rdy, don't & with hi+1?
-                let val = self.y & ((self.vector >> 8) as u8).wrapping_add(1);
-                if bus.addr != self.vector.wrapping_add(self.x as u16) {
-                    bus.write((val as u16) << 8 | bus.addr & 0xff, val);
-                } else {
-                    bus.write(bus.addr, val);
-                }
-                self.poll_intg(ctrl);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn op_9d(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        self.abi_store(self.x, self.a, bus, ctrl);
-    }
-
-    // SHX $nnnn,Y
-    fn op_9e(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 | 1 | 2 | 4 => {
-                self.abi_store(self.y, 0, bus, ctrl);
-            }
-            3 => {
-                let val = self.x & ((self.vector >> 8) as u8).wrapping_add(1);
-                if bus.addr != self.vector.wrapping_add(self.y as u16) {
-                    bus.write((val as u16) << 8 | bus.addr & 0xff, val);
-                } else {
-                    bus.write(bus.addr, val);
-                }
-                self.poll_intg(ctrl);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    // AHX $nnnn,Y
-    fn op_9f(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
-            0 | 1 | 2 | 4 => {
-                self.abi_store(self.y, 0, bus, ctrl);
-            }
-            3 => {
-                let val = self.a & ((self.vector >> 8) as u8).wrapping_add(1);
-                if bus.addr != self.vector.wrapping_add(self.y as u16) {
-                    bus.write((val as u16) << 8 | bus.addr & 0xff, val);
-                } else {
-                    bus.write(bus.addr, val);
-                }
-                self.poll_intg(ctrl);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn op_a0(&mut self) {
-        match self.op_cycle {
-            0 => {}
-            1 => {}
-            2 => {}
-            3 => {}
-            4 => {}
-            5 => {}
-            6 => {}
-            7 => {}
-            _ => {
-                unreachable!();
-            }
-        }
-    }
     fn op_a1(&mut self) {
         match self.op_cycle {
             0 => {}
@@ -2416,265 +1426,265 @@ impl CPU {
             }
         }
     }
+}
 
-    pub(super) fn exec(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op {
-            0x00 => self.op_00(bus, ctrl),
-            0x01 => self.op_01(bus, ctrl),
-            0x02 => self.op_02(bus, ctrl),
-            0x03 => self.op_03(bus, ctrl),
-            0x04 => self.op_04(bus, ctrl),
-            0x05 => self.op_05(bus, ctrl),
-            0x06 => self.op_06(bus, ctrl),
-            0x07 => self.op_07(bus, ctrl),
-            0x08 => self.op_08(bus, ctrl),
-            0x09 => self.op_09(bus, ctrl),
-            0x0a => self.op_0a(bus, ctrl),
-            0x0b => self.op_0b(bus, ctrl),
-            0x0c => self.op_0c(bus, ctrl),
-            0x0d => self.op_0d(bus, ctrl),
-            0x0e => self.op_0e(bus, ctrl),
-            0x0f => self.op_0f(bus, ctrl),
-            0x10 => self.op_10(bus, ctrl),
-            0x11 => self.op_11(bus, ctrl),
-            0x12 => self.op_12(bus, ctrl),
-            0x13 => self.op_13(bus, ctrl),
-            0x14 => self.op_14(bus, ctrl),
-            0x15 => self.op_15(bus, ctrl),
-            0x16 => self.op_16(bus, ctrl),
-            0x17 => self.op_17(bus, ctrl),
-            0x18 => self.op_18(bus, ctrl),
-            0x19 => self.op_19(bus, ctrl),
-            0x1a => self.op_1a(bus, ctrl),
-            0x1b => self.op_1b(bus, ctrl),
-            0x1c => self.op_1c(bus, ctrl),
-            0x1d => self.op_1d(bus, ctrl),
-            0x1e => self.op_1e(bus, ctrl),
-            0x1f => self.op_1f(bus, ctrl),
-            0x20 => self.op_20(bus, ctrl),
-            0x21 => self.op_21(bus, ctrl),
-            0x22 => self.op_22(bus, ctrl),
-            0x23 => self.op_23(bus, ctrl),
-            0x24 => self.op_24(bus, ctrl),
-            0x25 => self.op_25(bus, ctrl),
-            0x26 => self.op_26(bus, ctrl),
-            0x27 => self.op_27(bus, ctrl),
-            0x28 => self.op_28(bus, ctrl),
-            0x29 => self.op_29(bus, ctrl),
-            0x2a => self.op_2a(bus, ctrl),
-            0x2b => self.op_2b(bus, ctrl),
-            0x2c => self.op_2c(bus, ctrl),
-            0x2d => self.op_2d(bus, ctrl),
-            0x2e => self.op_2e(bus, ctrl),
-            0x2f => self.op_2f(bus, ctrl),
-            0x30 => self.op_30(bus, ctrl),
-            0x31 => self.op_31(bus, ctrl),
-            0x32 => self.op_32(bus, ctrl),
-            0x33 => self.op_33(bus, ctrl),
-            0x34 => self.op_34(bus, ctrl),
-            0x35 => self.op_35(bus, ctrl),
-            0x36 => self.op_36(bus, ctrl),
-            0x37 => self.op_37(bus, ctrl),
-            0x38 => self.op_38(bus, ctrl),
-            0x39 => self.op_39(bus, ctrl),
-            0x3a => self.op_3a(bus, ctrl),
-            0x3b => self.op_3b(bus, ctrl),
-            0x3c => self.op_3c(bus, ctrl),
-            0x3d => self.op_3d(bus, ctrl),
-            0x3e => self.op_3e(bus, ctrl),
-            0x3f => self.op_3f(bus, ctrl),
-            0x40 => self.op_40(bus, ctrl),
-            0x41 => self.op_41(bus, ctrl),
-            0x42 => self.op_42(bus, ctrl),
-            0x43 => self.op_43(bus, ctrl),
-            0x44 => self.op_44(bus, ctrl),
-            0x45 => self.op_45(bus, ctrl),
-            0x46 => self.op_46(bus, ctrl),
-            0x47 => self.op_47(bus, ctrl),
-            0x48 => self.op_48(bus, ctrl),
-            0x49 => self.op_49(bus, ctrl),
-            0x4a => self.op_4a(bus, ctrl),
-            0x4b => self.op_4b(bus, ctrl),
-            0x4c => self.op_4c(bus, ctrl),
-            0x4d => self.op_4d(bus, ctrl),
-            0x4e => self.op_4e(bus, ctrl),
-            0x4f => self.op_4f(bus, ctrl),
-            0x50 => self.op_50(bus, ctrl),
-            0x51 => self.op_51(bus, ctrl),
-            0x52 => self.op_52(bus, ctrl),
-            0x53 => self.op_53(bus, ctrl),
-            0x54 => self.op_54(bus, ctrl),
-            0x55 => self.op_55(bus, ctrl),
-            0x56 => self.op_56(bus, ctrl),
-            0x57 => self.op_57(bus, ctrl),
-            0x58 => self.op_58(bus, ctrl),
-            0x59 => self.op_59(bus, ctrl),
-            0x5a => self.op_5a(bus, ctrl),
-            0x5b => self.op_5b(bus, ctrl),
-            0x5c => self.op_5c(bus, ctrl),
-            0x5d => self.op_5d(bus, ctrl),
-            0x5e => self.op_5e(bus, ctrl),
-            0x5f => self.op_5f(bus, ctrl),
-            0x60 => self.op_60(bus, ctrl),
-            0x61 => self.op_61(bus, ctrl),
-            0x62 => self.op_62(bus, ctrl),
-            0x63 => self.op_63(bus, ctrl),
-            0x64 => self.op_64(bus, ctrl),
-            0x65 => self.op_65(bus, ctrl),
-            0x66 => self.op_66(bus, ctrl),
-            0x67 => self.op_67(bus, ctrl),
-            0x68 => self.op_68(bus, ctrl),
-            0x69 => self.op_69(bus, ctrl),
-            0x6a => self.op_6a(bus, ctrl),
-            0x6b => self.op_6b(bus, ctrl),
-            0x6c => self.op_6c(bus, ctrl),
-            0x6d => self.op_6d(bus, ctrl),
-            0x6e => self.op_6e(bus, ctrl),
-            0x6f => self.op_6f(bus, ctrl),
-            0x70 => self.op_70(bus, ctrl),
-            0x71 => self.op_71(bus, ctrl),
-            0x72 => self.op_72(bus, ctrl),
-            0x73 => self.op_73(bus, ctrl),
-            0x74 => self.op_74(bus, ctrl),
-            0x75 => self.op_75(bus, ctrl),
-            0x76 => self.op_76(bus, ctrl),
-            0x77 => self.op_77(bus, ctrl),
-            0x78 => self.op_78(bus, ctrl),
-            0x79 => self.op_79(bus, ctrl),
-            0x7a => self.op_7a(bus, ctrl),
-            0x7b => self.op_7b(bus, ctrl),
-            0x7c => self.op_7c(bus, ctrl),
-            0x7d => self.op_7d(bus, ctrl),
-            0x7e => self.op_7e(bus, ctrl),
-            0x7f => self.op_7f(bus, ctrl),
-            0x80 => self.op_80(bus, ctrl),
-            0x81 => self.op_81(bus, ctrl),
-            0x82 => self.op_82(bus, ctrl),
-            0x83 => self.op_83(bus, ctrl),
-            0x84 => self.op_84(bus, ctrl),
-            0x85 => self.op_85(bus, ctrl),
-            0x86 => self.op_86(bus, ctrl),
-            0x87 => self.op_87(bus, ctrl),
-            0x88 => self.op_88(bus, ctrl),
-            0x89 => self.op_89(bus, ctrl),
-            0x8a => self.op_8a(bus, ctrl),
-            0x8b => self.op_8b(bus, ctrl),
-            0x8c => self.op_8c(bus, ctrl),
-            0x8d => self.op_8d(bus, ctrl),
-            0x8e => self.op_8e(bus, ctrl),
-            0x8f => self.op_8f(bus, ctrl),
-            0x90 => self.op_90(bus, ctrl),
-            0x91 => self.op_91(bus, ctrl),
-            0x92 => self.op_92(bus, ctrl),
-            0x93 => self.op_93(bus, ctrl),
-            0x94 => self.op_94(bus, ctrl),
-            0x95 => self.op_95(bus, ctrl),
-            0x96 => self.op_96(bus, ctrl),
-            0x97 => self.op_97(bus, ctrl),
-            0x98 => self.op_98(bus, ctrl),
-            0x99 => self.op_99(bus, ctrl),
-            0x9a => self.op_9a(bus, ctrl),
-            0x9b => self.op_9b(bus, ctrl),
-            0x9c => self.op_9c(bus, ctrl),
-            0x9d => self.op_9d(bus, ctrl),
-            0x9e => self.op_9e(bus, ctrl),
-            0x9f => self.op_9f(bus, ctrl),
-            0xa0 => self.op_a0(),
-            0xa1 => self.op_a1(),
-            0xa2 => self.op_a2(),
-            0xa3 => self.op_a3(),
-            0xa4 => self.op_a4(),
-            0xa5 => self.op_a5(),
-            0xa6 => self.op_a6(),
-            0xa7 => self.op_a7(),
-            0xa8 => self.op_a8(),
-            0xa9 => self.op_a9(),
-            0xaa => self.op_aa(),
-            0xab => self.op_ab(),
-            0xac => self.op_ac(),
-            0xad => self.op_ad(),
-            0xae => self.op_ae(),
-            0xaf => self.op_af(),
-            0xb0 => self.op_b0(),
-            0xb1 => self.op_b1(),
-            0xb2 => self.op_b2(),
-            0xb3 => self.op_b3(),
-            0xb4 => self.op_b4(),
-            0xb5 => self.op_b5(),
-            0xb6 => self.op_b6(),
-            0xb7 => self.op_b7(),
-            0xb8 => self.op_b8(),
-            0xb9 => self.op_b9(),
-            0xba => self.op_ba(),
-            0xbb => self.op_bb(),
-            0xbc => self.op_bc(),
-            0xbd => self.op_bd(),
-            0xbe => self.op_be(),
-            0xbf => self.op_bf(),
-            0xc0 => self.op_c0(),
-            0xc1 => self.op_c1(),
-            0xc2 => self.op_c2(),
-            0xc3 => self.op_c3(),
-            0xc4 => self.op_c4(),
-            0xc5 => self.op_c5(),
-            0xc6 => self.op_c6(),
-            0xc7 => self.op_c7(),
-            0xc8 => self.op_c8(),
-            0xc9 => self.op_c9(),
-            0xca => self.op_ca(),
-            0xcb => self.op_cb(),
-            0xcc => self.op_cc(),
-            0xcd => self.op_cd(),
-            0xce => self.op_ce(),
-            0xcf => self.op_cf(),
-            0xd0 => self.op_d0(),
-            0xd1 => self.op_d1(),
-            0xd2 => self.op_d2(),
-            0xd3 => self.op_d3(),
-            0xd4 => self.op_d4(),
-            0xd5 => self.op_d5(),
-            0xd6 => self.op_d6(),
-            0xd7 => self.op_d7(),
-            0xd8 => self.op_d8(),
-            0xd9 => self.op_d9(),
-            0xda => self.op_da(),
-            0xdb => self.op_db(),
-            0xdc => self.op_dc(),
-            0xdd => self.op_dd(),
-            0xde => self.op_de(),
-            0xdf => self.op_df(),
-            0xe0 => self.op_e0(),
-            0xe1 => self.op_e1(),
-            0xe2 => self.op_e2(),
-            0xe3 => self.op_e3(),
-            0xe4 => self.op_e4(),
-            0xe5 => self.op_e5(),
-            0xe6 => self.op_e6(),
-            0xe7 => self.op_e7(),
-            0xe8 => self.op_e8(),
-            0xe9 => self.op_e9(),
-            0xea => self.op_ea(),
-            0xeb => self.op_eb(),
-            0xec => self.op_ec(),
-            0xed => self.op_ed(),
-            0xee => self.op_ee(),
-            0xef => self.op_ef(),
-            0xf0 => self.op_f0(),
-            0xf1 => self.op_f1(),
-            0xf2 => self.op_f2(),
-            0xf3 => self.op_f3(),
-            0xf4 => self.op_f4(),
-            0xf5 => self.op_f5(),
-            0xf6 => self.op_f6(),
-            0xf7 => self.op_f7(),
-            0xf8 => self.op_f8(),
-            0xf9 => self.op_f9(),
-            0xfa => self.op_fa(),
-            0xfb => self.op_fb(),
-            0xfc => self.op_fc(),
-            0xfd => self.op_fd(),
-            0xfe => self.op_fe(),
-            0xff => self.op_ff(),
-        }
+pub(super) fn exec(cpu: &mut CPU, bus: &mut Bus, ctrl: &mut Control) {
+    match cpu.op {
+        0x00 => CPU::brk(cpu, bus, ctrl),
+        0x01 => CPU::izx_alu(CPU::ora, cpu, bus, ctrl),
+        0x02 => CPU::kil(cpu, bus, ctrl),
+        0x03 => CPU::izx_rmw(CPU::slo, cpu, bus, ctrl),
+        0x04 => CPU::zp_alu(CPU::nop, cpu, bus, ctrl),
+        0x05 => CPU::zp_alu(CPU::ora, cpu, bus, ctrl),
+        0x06 => CPU::zp_rmw(CPU::asl, cpu, bus, ctrl),
+        0x07 => CPU::zp_rmw(CPU::slo, cpu, bus, ctrl),
+        0x08 => CPU::php(cpu, bus, ctrl),
+        0x09 => CPU::imm_alu(CPU::ora, cpu, bus, ctrl),
+        0x0a => CPU::implicit(|c| c.a = CPU::asl(c, c.a), cpu, bus, ctrl),
+        0x0b => CPU::imm_alu(CPU::anc, cpu, bus, ctrl),
+        0x0c => CPU::abs_alu(CPU::nop, cpu, bus, ctrl),
+        0x0d => CPU::abs_alu(CPU::ora, cpu, bus, ctrl),
+        0x0e => CPU::abs_rmw(CPU::asl, cpu, bus, ctrl),
+        0x0f => CPU::abs_rmw(CPU::slo, cpu, bus, ctrl),
+        0x10 => CPU::branch(!cpu.flags.n(), cpu, bus, ctrl),
+        0x11 => CPU::izy_alu(CPU::ora, cpu, bus, ctrl),
+        0x12 => CPU::kil(cpu, bus, ctrl),
+        0x13 => CPU::izy_rmw(CPU::slo, cpu, bus, ctrl),
+        0x14 => CPU::zpi_alu(cpu.x, CPU::nop, cpu, bus, ctrl),
+        0x15 => CPU::zpi_alu(cpu.x, CPU::ora, cpu, bus, ctrl),
+        0x16 => CPU::zpi_rmw(cpu.x, CPU::asl, cpu, bus, ctrl),
+        0x17 => CPU::zpi_rmw(cpu.x, CPU::slo, cpu, bus, ctrl),
+        0x18 => CPU::implicit(|c| c.flags.update_c(false), cpu, bus, ctrl),
+        0x19 => CPU::abi_alu(cpu.y, CPU::ora, cpu, bus, ctrl),
+        0x1a => CPU::implicit(|_| {}, cpu, bus, ctrl),
+        0x1b => CPU::abi_rmw(cpu.y, CPU::slo, cpu, bus, ctrl),
+        0x1c => CPU::abi_alu(cpu.x, CPU::nop, cpu, bus, ctrl),
+        0x1d => CPU::abi_alu(cpu.x, CPU::ora, cpu, bus, ctrl),
+        0x1e => CPU::abi_rmw(cpu.x, CPU::asl, cpu, bus, ctrl),
+        0x1f => CPU::abi_rmw(cpu.x, CPU::slo, cpu, bus, ctrl),
+        0x20 => CPU::jsr(cpu, bus, ctrl),
+        0x21 => CPU::izx_alu(CPU::and, cpu, bus, ctrl),
+        0x22 => CPU::kil(cpu, bus, ctrl),
+        0x23 => CPU::izx_rmw(CPU::rla, cpu, bus, ctrl),
+        0x24 => CPU::zp_alu(CPU::bit, cpu, bus, ctrl),
+        0x25 => CPU::zp_alu(CPU::and, cpu, bus, ctrl),
+        0x26 => CPU::zp_rmw(CPU::rol, cpu, bus, ctrl),
+        0x27 => CPU::zp_rmw(CPU::rla, cpu, bus, ctrl),
+        0x28 => CPU::plp(cpu, bus, ctrl),
+        0x29 => CPU::imm_alu(CPU::and, cpu, bus, ctrl),
+        0x2a => CPU::implicit(|c| c.a = CPU::rol(c, c.a), cpu, bus, ctrl),
+        0x2b => CPU::imm_alu(CPU::anc, cpu, bus, ctrl),
+        0x2c => CPU::abs_alu(CPU::bit, cpu, bus, ctrl),
+        0x2d => CPU::abs_alu(CPU::and, cpu, bus, ctrl),
+        0x2e => CPU::abs_rmw(CPU::rol, cpu, bus, ctrl),
+        0x2f => CPU::abs_rmw(CPU::rla, cpu, bus, ctrl),
+        0x30 => CPU::branch(cpu.flags.n(), cpu, bus, ctrl),
+        0x31 => CPU::izy_alu(CPU::and, cpu, bus, ctrl),
+        0x32 => CPU::kil(cpu, bus, ctrl),
+        0x33 => CPU::izy_rmw(CPU::rla, cpu, bus, ctrl),
+        0x34 => CPU::zpi_alu(cpu.x, CPU::nop, cpu, bus, ctrl),
+        0x35 => CPU::zpi_alu(cpu.x, CPU::and, cpu, bus, ctrl),
+        0x36 => CPU::zpi_rmw(cpu.x, CPU::rol, cpu, bus, ctrl),
+        0x37 => CPU::zpi_rmw(cpu.x, CPU::rla, cpu, bus, ctrl),
+        0x38 => CPU::implicit(|c| c.flags.update_c(true), cpu, bus, ctrl),
+        0x39 => CPU::abi_alu(cpu.y, CPU::and, cpu, bus, ctrl),
+        0x3a => CPU::implicit(|_| {}, cpu, bus, ctrl),
+        0x3b => CPU::abi_rmw(cpu.y, CPU::rla, cpu, bus, ctrl),
+        0x3c => CPU::abi_alu(cpu.x, CPU::nop, cpu, bus, ctrl),
+        0x3d => CPU::abi_alu(cpu.x, CPU::and, cpu, bus, ctrl),
+        0x3e => CPU::abi_rmw(cpu.x, CPU::rol, cpu, bus, ctrl),
+        0x3f => CPU::abi_rmw(cpu.x, CPU::rla, cpu, bus, ctrl),
+        0x40 => CPU::rti(cpu, bus, ctrl),
+        0x41 => CPU::izx_alu(CPU::eor, cpu, bus, ctrl),
+        0x42 => CPU::kil(cpu, bus, ctrl),
+        0x43 => CPU::izx_rmw(CPU::sre, cpu, bus, ctrl),
+        0x44 => CPU::zp_alu(CPU::nop, cpu, bus, ctrl),
+        0x45 => CPU::zp_alu(CPU::eor, cpu, bus, ctrl),
+        0x46 => CPU::zp_rmw(CPU::lsr, cpu, bus, ctrl),
+        0x47 => CPU::zp_rmw(CPU::sre, cpu, bus, ctrl),
+        0x48 => CPU::pha(cpu, bus, ctrl),
+        0x49 => CPU::imm_alu(CPU::eor, cpu, bus, ctrl),
+        0x4a => CPU::implicit(|c| c.a = CPU::lsr(c, c.a), cpu, bus, ctrl),
+        0x4b => CPU::imm_alu(|c, v| c.a = CPU::lsr(c, c.a & v), cpu, bus, ctrl),
+        0x4c => CPU::jmp(cpu, bus, ctrl),
+        0x4d => CPU::abs_alu(CPU::eor, cpu, bus, ctrl),
+        0x4e => CPU::abs_rmw(CPU::lsr, cpu, bus, ctrl),
+        0x4f => CPU::abs_rmw(CPU::sre, cpu, bus, ctrl),
+        0x50 => CPU::branch(!cpu.flags.v(), cpu, bus, ctrl),
+        0x51 => CPU::izy_alu(CPU::eor, cpu, bus, ctrl),
+        0x52 => CPU::kil(cpu, bus, ctrl),
+        0x53 => CPU::izy_rmw(CPU::sre, cpu, bus, ctrl),
+        0x54 => CPU::zpi_alu(cpu.x, CPU::nop, cpu, bus, ctrl),
+        0x55 => CPU::zpi_alu(cpu.x, CPU::eor, cpu, bus, ctrl),
+        0x56 => CPU::zpi_rmw(cpu.x, CPU::lsr, cpu, bus, ctrl),
+        0x57 => CPU::zpi_rmw(cpu.x, CPU::sre, cpu, bus, ctrl),
+        0x58 => CPU::implicit(|c| c.flags.update_i(false), cpu, bus, ctrl),
+        0x59 => CPU::abi_alu(cpu.y, CPU::eor, cpu, bus, ctrl),
+        0x5a => CPU::implicit(|_| {}, cpu, bus, ctrl),
+        0x5b => CPU::abi_rmw(cpu.y, CPU::sre, cpu, bus, ctrl),
+        0x5c => CPU::abi_alu(cpu.x, CPU::nop, cpu, bus, ctrl),
+        0x5d => CPU::abi_alu(cpu.x, CPU::eor, cpu, bus, ctrl),
+        0x5e => CPU::abi_rmw(cpu.x, CPU::lsr, cpu, bus, ctrl),
+        0x5f => CPU::abi_rmw(cpu.x, CPU::sre, cpu, bus, ctrl),
+        0x60 => CPU::rts(cpu, bus, ctrl),
+        0x61 => CPU::izx_alu(CPU::adc, cpu, bus, ctrl),
+        0x62 => CPU::kil(cpu, bus, ctrl),
+        0x63 => CPU::izx_rmw(CPU::rra, cpu, bus, ctrl),
+        0x64 => CPU::zp_alu(CPU::nop, cpu, bus, ctrl),
+        0x65 => CPU::zp_alu(CPU::adc, cpu, bus, ctrl),
+        0x66 => CPU::zp_rmw(CPU::ror, cpu, bus, ctrl),
+        0x67 => CPU::zp_rmw(CPU::rra, cpu, bus, ctrl),
+        0x68 => CPU::pla(cpu, bus, ctrl),
+        0x69 => CPU::imm_alu(CPU::adc, cpu, bus, ctrl),
+        0x6a => CPU::implicit(|c| c.a = CPU::ror(c, c.a), cpu, bus, ctrl),
+        0x6b => CPU::imm_alu(CPU::arr, cpu, bus, ctrl),
+        0x6c => CPU::jmp_ind(cpu, bus, ctrl),
+        0x6d => CPU::abs_alu(CPU::adc, cpu, bus, ctrl),
+        0x6e => CPU::abs_rmw(CPU::ror, cpu, bus, ctrl),
+        0x6f => CPU::abs_rmw(CPU::rra, cpu, bus, ctrl),
+        0x70 => CPU::branch(cpu.flags.v(), cpu, bus, ctrl),
+        0x71 => CPU::izy_alu(CPU::adc, cpu, bus, ctrl),
+        0x72 => CPU::kil(cpu, bus, ctrl),
+        0x73 => CPU::izy_rmw(CPU::rra, cpu, bus, ctrl),
+        0x74 => CPU::zpi_alu(cpu.x, CPU::nop, cpu, bus, ctrl),
+        0x75 => CPU::zpi_alu(cpu.x, CPU::adc, cpu, bus, ctrl),
+        0x76 => CPU::zpi_rmw(cpu.x, CPU::ror, cpu, bus, ctrl),
+        0x77 => CPU::zpi_rmw(cpu.x, CPU::rra, cpu, bus, ctrl),
+        0x78 => CPU::implicit(|c| c.flags.update_i(true), cpu, bus, ctrl),
+        0x79 => CPU::abi_alu(cpu.y, CPU::adc, cpu, bus, ctrl),
+        0x7a => CPU::implicit(|_| {}, cpu, bus, ctrl),
+        0x7b => CPU::abi_rmw(cpu.y, CPU::rra, cpu, bus, ctrl),
+        0x7c => CPU::abi_alu(cpu.x, CPU::nop, cpu, bus, ctrl),
+        0x7d => CPU::abi_alu(cpu.x, CPU::adc, cpu, bus, ctrl),
+        0x7e => CPU::abi_rmw(cpu.x, CPU::ror, cpu, bus, ctrl),
+        0x7f => CPU::abi_rmw(cpu.x, CPU::rra, cpu, bus, ctrl),
+        0x80 => CPU::imm_alu(CPU::nop, cpu, bus, ctrl),
+        0x81 => CPU::izx_store(cpu.a, cpu, bus, ctrl),
+        0x82 => CPU::imm_alu(CPU::nop, cpu, bus, ctrl),
+        0x83 => CPU::izx_store(cpu.a & cpu.x, cpu, bus, ctrl),
+        0x84 => CPU::zp_store(cpu.y, cpu, bus, ctrl),
+        0x85 => CPU::zp_store(cpu.a, cpu, bus, ctrl),
+        0x86 => CPU::zp_store(cpu.x, cpu, bus, ctrl),
+        0x87 => CPU::zp_store(cpu.a & cpu.x, cpu, bus, ctrl),
+        0x88 => CPU::implicit(|c| c.y = CPU::dec(c, c.y), cpu, bus, ctrl),
+        0x89 => CPU::imm_alu(CPU::nop, cpu, bus, ctrl),
+        0x8a => CPU::implicit(|c| CPU::lda(c, c.x), cpu, bus, ctrl),
+        0x8b => CPU::imm_alu(CPU::xaa, cpu, bus, ctrl),
+        0x8c => CPU::abs_store(cpu.y, cpu, bus, ctrl),
+        0x8d => CPU::abs_store(cpu.a, cpu, bus, ctrl),
+        0x8e => CPU::abs_store(cpu.x, cpu, bus, ctrl),
+        0x8f => CPU::abs_store(cpu.a & cpu.x, cpu, bus, ctrl),
+        0x90 => CPU::branch(!cpu.flags.c(), cpu, bus, ctrl),
+        0x91 => CPU::izy_store(cpu.a, cpu, bus, ctrl),
+        0x92 => CPU::kil(cpu, bus, ctrl),
+        0x93 => CPU::ahx_izy(cpu, bus, ctrl),
+        0x94 => CPU::zpi_store(cpu.x, cpu.y, cpu, bus, ctrl),
+        0x95 => CPU::zpi_store(cpu.x, cpu.a, cpu, bus, ctrl),
+        0x96 => CPU::zpi_store(cpu.y, cpu.x, cpu, bus, ctrl),
+        0x97 => CPU::zpi_store(cpu.y, cpu.a & cpu.x, cpu, bus, ctrl),
+        0x98 => CPU::implicit(|c| CPU::lda(c, c.y), cpu, bus, ctrl),
+        0x99 => CPU::abi_store(cpu.y, cpu.a, cpu, bus, ctrl),
+        0x9a => CPU::implicit(|c| c.sp = c.x, cpu, bus, ctrl),
+        0x9b => CPU::tas(cpu, bus, ctrl),
+        0x9c => CPU::shy(cpu, bus, ctrl),
+        0x9d => CPU::abi_store(cpu.x, cpu.a, cpu, bus, ctrl),
+        0x9e => CPU::shx(cpu, bus, ctrl),
+        0x9f => CPU::ahx_abi(cpu, bus, ctrl),
+        0xa0 => CPU::imm_alu(CPU::ldy, cpu, bus, ctrl),
+        0xa1 => cpu.op_a1(),
+        0xa2 => cpu.op_a2(),
+        0xa3 => cpu.op_a3(),
+        0xa4 => cpu.op_a4(),
+        0xa5 => cpu.op_a5(),
+        0xa6 => cpu.op_a6(),
+        0xa7 => cpu.op_a7(),
+        0xa8 => cpu.op_a8(),
+        0xa9 => cpu.op_a9(),
+        0xaa => cpu.op_aa(),
+        0xab => cpu.op_ab(),
+        0xac => cpu.op_ac(),
+        0xad => cpu.op_ad(),
+        0xae => cpu.op_ae(),
+        0xaf => cpu.op_af(),
+        0xb0 => cpu.op_b0(),
+        0xb1 => cpu.op_b1(),
+        0xb2 => cpu.op_b2(),
+        0xb3 => cpu.op_b3(),
+        0xb4 => cpu.op_b4(),
+        0xb5 => cpu.op_b5(),
+        0xb6 => cpu.op_b6(),
+        0xb7 => cpu.op_b7(),
+        0xb8 => cpu.op_b8(),
+        0xb9 => cpu.op_b9(),
+        0xba => cpu.op_ba(),
+        0xbb => cpu.op_bb(),
+        0xbc => cpu.op_bc(),
+        0xbd => cpu.op_bd(),
+        0xbe => cpu.op_be(),
+        0xbf => cpu.op_bf(),
+        0xc0 => cpu.op_c0(),
+        0xc1 => cpu.op_c1(),
+        0xc2 => cpu.op_c2(),
+        0xc3 => cpu.op_c3(),
+        0xc4 => cpu.op_c4(),
+        0xc5 => cpu.op_c5(),
+        0xc6 => cpu.op_c6(),
+        0xc7 => cpu.op_c7(),
+        0xc8 => cpu.op_c8(),
+        0xc9 => cpu.op_c9(),
+        0xca => cpu.op_ca(),
+        0xcb => cpu.op_cb(),
+        0xcc => cpu.op_cc(),
+        0xcd => cpu.op_cd(),
+        0xce => cpu.op_ce(),
+        0xcf => cpu.op_cf(),
+        0xd0 => cpu.op_d0(),
+        0xd1 => cpu.op_d1(),
+        0xd2 => cpu.op_d2(),
+        0xd3 => cpu.op_d3(),
+        0xd4 => cpu.op_d4(),
+        0xd5 => cpu.op_d5(),
+        0xd6 => cpu.op_d6(),
+        0xd7 => cpu.op_d7(),
+        0xd8 => cpu.op_d8(),
+        0xd9 => cpu.op_d9(),
+        0xda => cpu.op_da(),
+        0xdb => cpu.op_db(),
+        0xdc => cpu.op_dc(),
+        0xdd => cpu.op_dd(),
+        0xde => cpu.op_de(),
+        0xdf => cpu.op_df(),
+        0xe0 => cpu.op_e0(),
+        0xe1 => cpu.op_e1(),
+        0xe2 => cpu.op_e2(),
+        0xe3 => cpu.op_e3(),
+        0xe4 => cpu.op_e4(),
+        0xe5 => cpu.op_e5(),
+        0xe6 => cpu.op_e6(),
+        0xe7 => cpu.op_e7(),
+        0xe8 => cpu.op_e8(),
+        0xe9 => cpu.op_e9(),
+        0xea => cpu.op_ea(),
+        0xeb => cpu.op_eb(),
+        0xec => cpu.op_ec(),
+        0xed => cpu.op_ed(),
+        0xee => cpu.op_ee(),
+        0xef => cpu.op_ef(),
+        0xf0 => cpu.op_f0(),
+        0xf1 => cpu.op_f1(),
+        0xf2 => cpu.op_f2(),
+        0xf3 => cpu.op_f3(),
+        0xf4 => cpu.op_f4(),
+        0xf5 => cpu.op_f5(),
+        0xf6 => cpu.op_f6(),
+        0xf7 => cpu.op_f7(),
+        0xf8 => cpu.op_f8(),
+        0xf9 => cpu.op_f9(),
+        0xfa => cpu.op_fa(),
+        0xfb => cpu.op_fb(),
+        0xfc => cpu.op_fc(),
+        0xfd => cpu.op_fd(),
+        0xfe => cpu.op_fe(),
+        0xff => cpu.op_ff(),
     }
 }

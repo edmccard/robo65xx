@@ -253,7 +253,7 @@ impl CPU {
             self.op_cycle += 1;
         }
 
-        self.exec(bus, ctrl);
+        ops::exec(self, bus, ctrl);
 
         self.irq_pending = ctrl.irq;
         if ctrl.nmi {
@@ -295,85 +295,85 @@ fn add_without_carry(a: u16, b: u8) -> u16 {
     a.wrapping_add(b as u16) & 0xff00
 }
 
-// Addressing
+// Addressing modes.
 impl CPU {
-    fn implicit<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    fn implicit<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
     where
         F: Fn(&mut Self),
     {
-        match self.op_cycle {
+        match cpu.op_cycle {
             0 => {
-                bus.read(self.pc); // dummy read
-                self.poll_intg(ctrl);
+                bus.read(cpu.pc); // dummy read
+                cpu.poll_intg(ctrl);
             }
             1 => {
-                op(self);
-                self.fetch(bus, ctrl);
+                op(cpu);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn imm_alu<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    fn imm_alu<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
     where
         F: Fn(&mut Self, u8),
     {
-        match self.op_cycle {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // operand
-                self.poll_intg(ctrl);
+                cpu.read_pc(bus); // operand
+                cpu.poll_intg(ctrl);
             }
             1 => {
-                op(self, bus.data);
-                self.fetch(bus, ctrl);
+                op(cpu, bus.data);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn zp_alu<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    fn zp_alu<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
     where
         F: Fn(&mut Self, u8),
     {
-        match self.op_cycle {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // zero-page address
+                cpu.read_pc(bus); // zero-page address
             }
             1 => {
                 bus.read(bus.data as u16); // operand
-                self.poll_intg(ctrl);
+                cpu.poll_intg(ctrl);
             }
             2 => {
-                op(self, bus.data);
-                self.fetch(bus, ctrl);
+                op(cpu, bus.data);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn zp_store(&mut self, src: u8, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
+    fn zp_store(src: u8, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // zero-page address
+                cpu.read_pc(bus); // zero-page address
             }
             1 => {
                 bus.write(bus.data as u16, src);
-                self.poll_intg(ctrl);
+                cpu.poll_intg(ctrl);
             }
             2 => {
-                self.fetch(bus, ctrl);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn zp_rmw<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    fn zp_rmw<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
     where
         F: Fn(&mut Self, u8) -> u8,
     {
-        match self.op_cycle {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // zero-page address
+                cpu.read_pc(bus); // zero-page address
             }
             1 => {
                 bus.read(bus.data as u16); // operand
@@ -382,484 +382,664 @@ impl CPU {
                 bus.write(bus.addr, bus.data); // dummy write
             }
             3 => {
-                bus.write(bus.addr, op(self, bus.data));
-                self.poll_intg(ctrl);
+                bus.write(bus.addr, op(cpu, bus.data));
+                cpu.poll_intg(ctrl);
             }
             4 => {
-                self.fetch(bus, ctrl);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn abs_alu<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    fn abs_alu<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
     where
         F: Fn(&mut Self, u8),
     {
-        match self.op_cycle {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // low byte of address
+                cpu.read_pc(bus); // low byte of address
             }
             1 => {
-                self.vector = bus.data as u16;
-                self.read_pc(bus); // high byte of address
+                cpu.vector = bus.data as u16;
+                cpu.read_pc(bus); // high byte of address
             }
             2 => {
-                bus.read((bus.data as u16).wrapping_shl(8) | self.vector); // operand
-                self.poll_intg(ctrl);
+                bus.read((bus.data as u16).wrapping_shl(8) | cpu.vector); // operand
+                cpu.poll_intg(ctrl);
             }
             3 => {
-                op(self, bus.data);
-                self.fetch(bus, ctrl);
+                op(cpu, bus.data);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn abs_store(&mut self, src: u8, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
+    fn abs_store(src: u8, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // low byte of address
+                cpu.read_pc(bus); // low byte of address
             }
             1 => {
-                self.vector = bus.data as u16;
-                self.read_pc(bus); // high byte of address
+                cpu.vector = bus.data as u16;
+                cpu.read_pc(bus); // high byte of address
             }
             2 => {
-                bus.write((bus.data as u16).wrapping_shl(8) | self.vector, src);
-                self.poll_intg(ctrl);
+                bus.write((bus.data as u16).wrapping_shl(8) | cpu.vector, src);
+                cpu.poll_intg(ctrl);
             }
             3 => {
-                self.fetch(bus, ctrl);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn abs_rmw<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    fn abs_rmw<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
     where
         F: Fn(&mut Self, u8) -> u8,
     {
-        match self.op_cycle {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // low byte of address
+                cpu.read_pc(bus); // low byte of address
             }
             1 => {
-                self.vector = bus.data as u16;
-                self.read_pc(bus); // high byte of address
+                cpu.vector = bus.data as u16;
+                cpu.read_pc(bus); // high byte of address
             }
             2 => {
-                bus.read((bus.data as u16).wrapping_shl(8) | self.vector); // operand
+                bus.read((bus.data as u16).wrapping_shl(8) | cpu.vector); // operand
             }
             3 => {
                 bus.write(bus.addr, bus.data); // dummy write
             }
             4 => {
-                bus.write(bus.addr, op(self, bus.data));
-                self.poll_intg(ctrl);
+                bus.write(bus.addr, op(cpu, bus.data));
+                cpu.poll_intg(ctrl);
             }
             5 => {
-                self.fetch(bus, ctrl);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn zpi_alu<F>(&mut self, reg: u8, op: F, bus: &mut Bus, ctrl: &mut Control)
+    fn zpi_alu<F>(idx: u8, op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
     where
         F: Fn(&mut Self, u8),
     {
-        match self.op_cycle {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // base zero-page address
+                cpu.read_pc(bus); // base zero-page address
             }
             1 => {
-                self.vector = add_without_carry(bus.data as u16, reg);
+                cpu.vector = add_without_carry(bus.data as u16, idx);
                 bus.read(bus.data as u16); // dummy read
             }
             2 => {
-                bus.read(self.vector); // operand
-                self.poll_intg(ctrl);
+                bus.read(cpu.vector); // operand
+                cpu.poll_intg(ctrl);
             }
             3 => {
-                op(self, bus.data);
-                self.fetch(bus, ctrl);
+                op(cpu, bus.data);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn zpi_store(&mut self, reg: u8, src: u8, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
+    fn zpi_store(idx: u8, src: u8, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // base zero-page address
+                cpu.read_pc(bus); // base zero-page address
             }
             1 => {
-                self.vector = add_without_carry(bus.data as u16, reg);
+                cpu.vector = add_without_carry(bus.data as u16, idx);
                 bus.read(bus.data as u16); // dummy read
             }
             2 => {
-                bus.write(self.vector, src); // operand
-                self.poll_intg(ctrl);
+                bus.write(cpu.vector, src); // operand
+                cpu.poll_intg(ctrl);
             }
             3 => {
-                self.fetch(bus, ctrl);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn zpi_rmw<F>(&mut self, reg: u8, op: F, bus: &mut Bus, ctrl: &mut Control)
+    fn zpi_rmw<F>(idx: u8, op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
     where
         F: Fn(&mut Self, u8) -> u8,
     {
-        match self.op_cycle {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // base zero-page address
+                cpu.read_pc(bus); // base zero-page address
             }
             1 => {
-                self.vector = add_without_carry(bus.data as u16, reg);
+                cpu.vector = add_without_carry(bus.data as u16, idx);
                 bus.read(bus.data as u16); // dummy read
             }
             2 => {
-                bus.read(self.vector); // operand
+                bus.read(cpu.vector); // operand
             }
             3 => {
                 bus.write(bus.addr, bus.data); // dummy write
             }
             4 => {
-                bus.write(bus.addr, op(self, bus.data));
-                self.poll_intg(ctrl);
+                bus.write(bus.addr, op(cpu, bus.data));
+                cpu.poll_intg(ctrl);
             }
             5 => {
-                self.fetch(bus, ctrl);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn abi_alu<F>(&mut self, reg: u8, op: F, bus: &mut Bus, ctrl: &mut Control)
+    fn abi_alu<F>(idx: u8, op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
     where
         F: Fn(&mut Self, u8),
     {
-        match self.op_cycle {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // low byte of address
+                cpu.read_pc(bus); // low byte of address
             }
             1 => {
-                self.vector = bus.data as u16;
-                self.read_pc(bus); // high byte of address
+                cpu.vector = bus.data as u16;
+                cpu.read_pc(bus); // high byte of address
             }
             2 => {
-                self.vector = (bus.data as u16).wrapping_shl(8) | self.vector;
-                let addr = self.vector.wrapping_add(reg as u16);
-                if addr & 0xff00 == self.vector & 0xff00 {
-                    bus.read(add_without_carry(self.vector, reg)); // operand
-                    self.op_cycle += 1;
+                cpu.vector = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                let addr = cpu.vector.wrapping_add(idx as u16);
+                if addr & 0xff00 == cpu.vector & 0xff00 {
+                    bus.read(add_without_carry(cpu.vector, idx)); // operand
+                    cpu.op_cycle += 1;
                 } else {
-                    bus.read(add_without_carry(self.vector, reg)); // dummy read
+                    bus.read(add_without_carry(cpu.vector, idx)); // dummy read
                 }
             }
             3 => {
-                bus.read(self.vector.wrapping_add(reg as u16)); // operand
-                self.poll_intg(ctrl);
+                bus.read(cpu.vector.wrapping_add(idx as u16)); // operand
+                cpu.poll_intg(ctrl);
             }
             4 => {
-                op(self, bus.data);
-                self.fetch(bus, ctrl);
+                op(cpu, bus.data);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn abi_store(&mut self, reg: u8, src: u8, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
+    fn abi_store(idx: u8, src: u8, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // low byte of address
+                cpu.read_pc(bus); // low byte of address
             }
             1 => {
-                self.vector = bus.data as u16;
-                self.read_pc(bus); // high byte of address
+                cpu.vector = bus.data as u16;
+                cpu.read_pc(bus); // high byte of address
             }
             2 => {
-                self.vector = (bus.data as u16).wrapping_shl(8) | self.vector;
-                bus.read(add_without_carry(self.vector, reg)); // dummy read
+                cpu.vector = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                bus.read(add_without_carry(cpu.vector, idx)); // dummy read
             }
             3 => {
-                bus.write(self.vector.wrapping_add(reg as u16), src);
-                self.poll_intg(ctrl);
+                bus.write(cpu.vector.wrapping_add(idx as u16), src);
+                cpu.poll_intg(ctrl);
             }
             4 => {
-                self.fetch(bus, ctrl);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn abi_rmw<F>(&mut self, reg: u8, op: F, bus: &mut Bus, ctrl: &mut Control)
+    fn abi_rmw<F>(idx: u8, op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
     where
         F: Fn(&mut Self, u8) -> u8,
     {
-        match self.op_cycle {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // low byte of address
+                cpu.read_pc(bus); // low byte of address
             }
             1 => {
-                self.vector = bus.data as u16;
-                self.read_pc(bus); // high byte of address
+                cpu.vector = bus.data as u16;
+                cpu.read_pc(bus); // high byte of address
             }
             2 => {
-                self.vector = (bus.data as u16).wrapping_shl(8) | self.vector;
-                bus.read(add_without_carry(self.vector, reg)); // dummy read
+                cpu.vector = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                bus.read(add_without_carry(cpu.vector, idx)); // dummy read
             }
             3 => {
-                bus.read(self.vector.wrapping_add(reg as u16)); // operand
+                bus.read(cpu.vector.wrapping_add(idx as u16)); // operand
             }
             4 => {
                 bus.write(bus.addr, bus.data); // dummy write
             }
             5 => {
-                bus.write(bus.addr, op(self, bus.data));
-                self.poll_intg(ctrl);
+                bus.write(bus.addr, op(cpu, bus.data));
+                cpu.poll_intg(ctrl);
             }
             6 => {
-                self.fetch(bus, ctrl);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn izx_alu<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    fn izx_alu<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
     where
         F: Fn(&mut Self, u8),
     {
-        match self.op_cycle {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // base zero-page pointer to address
+                cpu.read_pc(bus); // base zero-page pointer to address
             }
             1 => {
-                self.vector = add_without_carry(bus.data as u16, self.x);
+                cpu.vector = add_without_carry(bus.data as u16, cpu.x);
                 bus.read(bus.data as u16); // dummy read
             }
             2 => {
-                bus.read(self.vector); // low byte of address
+                bus.read(cpu.vector); // low byte of address
             }
             3 => {
-                bus.read(add_without_carry(self.vector, 1)); // high byte of address
-                self.vector = bus.data as u16;
+                bus.read(add_without_carry(cpu.vector, 1)); // high byte of address
+                cpu.vector = bus.data as u16;
             }
             4 => {
-                bus.read((bus.data as u16).wrapping_shl(8) | self.vector); // operand
-                self.poll_intg(ctrl);
+                bus.read((bus.data as u16).wrapping_shl(8) | cpu.vector); // operand
+                cpu.poll_intg(ctrl);
             }
             5 => {
-                op(self, bus.data);
-                self.fetch(bus, ctrl);
+                op(cpu, bus.data);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn izx_store(&mut self, src: u8, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
+    fn izx_store(src: u8, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // base zero-page pointer to address
+                cpu.read_pc(bus); // base zero-page pointer to address
             }
             1 => {
-                self.vector = add_without_carry(bus.data as u16, self.x);
+                cpu.vector = add_without_carry(bus.data as u16, cpu.x);
                 bus.read(bus.data as u16); // dummy read
             }
             2 => {
-                bus.read(self.vector); // low byte of address
+                bus.read(cpu.vector); // low byte of address
             }
             3 => {
-                bus.read(add_without_carry(self.vector, 1)); // high byte of address
-                self.vector = bus.data as u16;
+                bus.read(add_without_carry(cpu.vector, 1)); // high byte of address
+                cpu.vector = bus.data as u16;
             }
             4 => {
-                bus.write((bus.data as u16).wrapping_shl(8) | self.vector, src); // operand
-                self.poll_intg(ctrl);
+                bus.write((bus.data as u16).wrapping_shl(8) | cpu.vector, src); // operand
+                cpu.poll_intg(ctrl);
             }
             5 => {
-                self.fetch(bus, ctrl);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn izx_rmw<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    fn izx_rmw<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
     where
         F: Fn(&mut Self, u8) -> u8,
     {
-        match self.op_cycle {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // base zero-page pointer to address
+                cpu.read_pc(bus); // base zero-page pointer to address
             }
             1 => {
-                self.vector = add_without_carry(bus.data as u16, self.x);
+                cpu.vector = add_without_carry(bus.data as u16, cpu.x);
                 bus.read(bus.data as u16); // dummy read
             }
             2 => {
-                bus.read(self.vector); // low byte of address
+                bus.read(cpu.vector); // low byte of address
             }
             3 => {
-                bus.read(add_without_carry(self.vector, 1)); // high byte of address
-                self.vector = bus.data as u16;
+                bus.read(add_without_carry(cpu.vector, 1)); // high byte of address
+                cpu.vector = bus.data as u16;
             }
             4 => {
-                bus.read((bus.data as u16).wrapping_shl(8) | self.vector); // operand
+                bus.read((bus.data as u16).wrapping_shl(8) | cpu.vector); // operand
             }
             5 => {
                 bus.write(bus.addr, bus.data); // dummy write
             }
             6 => {
-                bus.write(bus.addr, op(self, bus.data));
-                self.poll_intg(ctrl);
+                bus.write(bus.addr, op(cpu, bus.data));
+                cpu.poll_intg(ctrl);
             }
             7 => {
-                self.fetch(bus, ctrl);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn izy_alu<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    fn izy_alu<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
     where
         F: Fn(&mut Self, u8),
     {
-        match self.op_cycle {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // zero-page pointer to base address
+                cpu.read_pc(bus); // zero-page pointer to base address
             }
             1 => {
-                self.vector = bus.data as u16;
-                bus.read(self.vector); // low byte of base address
+                cpu.vector = bus.data as u16;
+                bus.read(cpu.vector); // low byte of base address
             }
             2 => {
-                bus.read(add_without_carry(self.vector, 1)); // high byte of base address
-                self.vector = bus.data as u16;
+                bus.read(add_without_carry(cpu.vector, 1)); // high byte of base address
+                cpu.vector = bus.data as u16;
             }
             3 => {
-                self.vector = (bus.data as u16).wrapping_shl(8) | self.vector;
-                let addr = self.vector.wrapping_add(self.y as u16);
-                if addr & 0xff00 == self.vector & 0xff00 {
-                    bus.read(add_without_carry(self.vector, self.y)); // operand
-                    self.op_cycle += 1;
+                cpu.vector = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                let addr = cpu.vector.wrapping_add(cpu.y as u16);
+                if addr & 0xff00 == cpu.vector & 0xff00 {
+                    bus.read(add_without_carry(cpu.vector, cpu.y)); // operand
+                    cpu.op_cycle += 1;
                 } else {
-                    bus.read(add_without_carry(self.vector, self.y)); // dummy read
+                    bus.read(add_without_carry(cpu.vector, cpu.y)); // dummy read
                 }
             }
             4 => {
-                bus.read(self.vector.wrapping_add(self.y as u16)); // operand
-                self.poll_intg(ctrl);
+                bus.read(cpu.vector.wrapping_add(cpu.y as u16)); // operand
+                cpu.poll_intg(ctrl);
             }
             5 => {
-                op(self, bus.data);
-                self.fetch(bus, ctrl);
+                op(cpu, bus.data);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn izy_store(&mut self, src: u8, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
+    fn izy_store(src: u8, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // zero-page pointer to base address
+                cpu.read_pc(bus); // zero-page pointer to base address
             }
             1 => {
-                self.vector = bus.data as u16;
-                bus.read(self.vector); // low byte of base address
+                cpu.vector = bus.data as u16;
+                bus.read(cpu.vector); // low byte of base address
             }
             2 => {
-                bus.read(add_without_carry(self.vector, 1)); // high byte of base address
-                self.vector = bus.data as u16;
+                bus.read(add_without_carry(cpu.vector, 1)); // high byte of base address
+                cpu.vector = bus.data as u16;
             }
             3 => {
-                self.vector = (bus.data as u16).wrapping_shl(8) | self.vector;
-                bus.read(add_without_carry(self.vector, self.y)); // dummy read
+                cpu.vector = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                bus.read(add_without_carry(cpu.vector, cpu.y)); // dummy read
             }
             4 => {
-                bus.write(self.vector.wrapping_add(self.y as u16), src); // operand
-                self.poll_intg(ctrl);
+                bus.write(cpu.vector.wrapping_add(cpu.y as u16), src); // operand
+                cpu.poll_intg(ctrl);
             }
             5 => {
-                self.fetch(bus, ctrl);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn izy_rmw<F>(&mut self, op: F, bus: &mut Bus, ctrl: &mut Control)
+    fn izy_rmw<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
     where
         F: Fn(&mut Self, u8) -> u8,
     {
-        match self.op_cycle {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // zero-page pointer to base address
+                cpu.read_pc(bus); // zero-page pointer to base address
             }
             1 => {
-                self.vector = bus.data as u16;
-                bus.read(self.vector); // low byte of base address
+                cpu.vector = bus.data as u16;
+                bus.read(cpu.vector); // low byte of base address
             }
             2 => {
-                bus.read(add_without_carry(self.vector, 1)); // high byte of base address
-                self.vector = bus.data as u16;
+                bus.read(add_without_carry(cpu.vector, 1)); // high byte of base address
+                cpu.vector = bus.data as u16;
             }
             3 => {
-                self.vector = (bus.data as u16).wrapping_shl(8) | self.vector;
-                bus.read(add_without_carry(self.vector, self.y)); // dummy read
+                cpu.vector = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                bus.read(add_without_carry(cpu.vector, cpu.y)); // dummy read
             }
             4 => {
-                bus.read(self.vector.wrapping_add(self.y as u16)); // operand
+                bus.read(cpu.vector.wrapping_add(cpu.y as u16)); // operand
             }
             5 => {
                 bus.write(bus.addr, bus.data); // dummy write
             }
             6 => {
-                bus.write(bus.addr, op(self, bus.data));
-                self.poll_intg(ctrl);
+                bus.write(bus.addr, op(cpu, bus.data));
+                cpu.poll_intg(ctrl);
             }
             7 => {
-                self.fetch(bus, ctrl);
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
+}
 
-    fn branch(&mut self, bus: &mut Bus, ctrl: &mut Control, take: bool) {
-        match self.op_cycle {
+// ALU operations.
+impl CPU {
+    fn nop(_: &mut Self, _: u8) {}
+
+    fn lda(cpu: &mut Self, data: u8) {
+        cpu.a = data;
+        cpu.flags.set_nz(cpu.a);
+    }
+
+    fn ldy(cpu: &mut Self, data: u8) {
+        cpu.y = data;
+        cpu.flags.set_nz(cpu.y);
+    }
+
+    fn and(cpu: &mut Self, data: u8) {
+        cpu.a &= data;
+        cpu.flags.set_nz(cpu.a);
+    }
+
+    fn ora(cpu: &mut Self, data: u8) {
+        cpu.a |= data;
+        cpu.flags.set_nz(cpu.a);
+    }
+
+    fn eor(cpu: &mut Self, data: u8) {
+        cpu.a ^= data;
+        cpu.flags.set_nz(cpu.a);
+    }
+
+    fn bit(cpu: &mut Self, data: u8) {
+        cpu.flags.set_z(cpu.a & data);
+        cpu.flags.set_from(data, 0b11000000);
+    }
+
+    fn anc(cpu: &mut Self, data: u8) {
+        CPU::and(cpu, data);
+        cpu.flags.update_c(cpu.a & 0x80 != 0);
+    }
+
+    fn adc(cpu: &mut Self, data: u8) {
+        if cpu.flags.d() {
+            CPU::adc_dec(cpu, data);
+        } else {
+            CPU::adc_hex(cpu, data);
+        }
+    }
+
+    fn adc_dec(cpu: &mut Self, data: u8) {
+        let val = data as u16;
+        let a = cpu.a as u16;
+        let mut sl = (a & 0x0f)
+            .wrapping_add(val & 0x0f)
+            .wrapping_add(cpu.flags.c() as u16);
+        if sl >= 0x0a {
+            sl = (sl.wrapping_add(0x06) & 0x0f).wrapping_add(0x10);
+        }
+        let mut sum = (a & 0xf0).wrapping_add(val & 0xf0).wrapping_add(sl);
+        let v = !(a ^ val) & (val ^ sum) & 0x80;
+        cpu.flags.update_v(v != 0);
+        cpu.flags.set_n(sum as u8);
+
+        cpu.flags
+            .set_z(a.wrapping_add(val).wrapping_add(cpu.flags.c() as u16) as u8);
+
+        if sum >= 0xa0 {
+            sum = sum.wrapping_add(0x60);
+        }
+        cpu.flags.update_c(sum >= 0x100);
+        cpu.a = sum as u8;
+    }
+
+    fn adc_hex(cpu: &mut Self, data: u8) {
+        let val = data as u16;
+        let a = cpu.a as u16;
+        let sum = a.wrapping_add(val).wrapping_add(cpu.flags.c() as u16);
+        let v = !(a ^ val) & (val ^ sum) & 0x80;
+        cpu.flags.update_v(v != 0);
+        cpu.flags.update_c(sum > 0xff);
+        cpu.a = sum as u8;
+        cpu.flags.set_nz(cpu.a);
+    }
+
+    fn arr(cpu: &mut Self, data: u8) {
+        cpu.a &= data;
+        let arr = (cpu.a >> 1) | ((cpu.flags.c() as u8).wrapping_shl(7));
+        cpu.flags.set_nz(arr);
+
+        if cpu.flags.d() {
+            CPU::arr_dec(cpu, arr);
+        } else {
+            CPU::arr_hex(cpu, arr);
+        }
+    }
+
+    fn arr_dec(cpu: &mut Self, data: u8) {
+        let mut val = data;
+        cpu.flags.update_v((val ^ cpu.a) & 0x40 != 0);
+        if (cpu.a & 0x0f) >= 0x05 {
+            val = (val.wrapping_add(0x06) & 0x0f) | (val & 0xf0);
+        }
+        cpu.flags.update_c((cpu.a & 0xf0) >= 0x50);
+        if cpu.flags.c() {
+            val = val.wrapping_add(0x60);
+        }
+        cpu.a = val;
+    }
+
+    fn arr_hex(cpu: &mut Self, data: u8) {
+        cpu.flags.update_c((data & 0x40) != 0);
+        cpu.flags
+            .update_v((data & 0x40) ^ ((data & 0x20) << 1) != 0);
+        cpu.a = data;
+    }
+
+    fn xaa(cpu: &mut Self, data: u8) {
+        CPU::lda(cpu, (cpu.a | 0xef) & cpu.x & data);
+    }
+
+    fn asl(cpu: &mut Self, data: u8) -> u8 {
+        let val = data.wrapping_shl(1);
+        cpu.flags.set_nz(val);
+        cpu.flags.update_c(data & 0x80 != 0);
+        val
+    }
+
+    fn slo(cpu: &mut Self, data: u8) -> u8 {
+        let val = CPU::asl(cpu, data);
+        CPU::ora(cpu, val);
+        val
+    }
+
+    fn rol(cpu: &mut Self, data: u8) -> u8 {
+        let val = data.wrapping_shl(1) | cpu.flags.c() as u8;
+        cpu.flags.set_nz(val);
+        cpu.flags.update_c(data & 0x80 != 0);
+        val
+    }
+
+    fn rla(cpu: &mut Self, data: u8) -> u8 {
+        let val = CPU::rol(cpu, data);
+        CPU::and(cpu, val);
+        val
+    }
+
+    fn ror(cpu: &mut Self, data: u8) -> u8 {
+        let val = (data >> 1) | (cpu.flags.c() as u8).wrapping_shl(7);
+        cpu.flags.set_nz(val);
+        cpu.flags.update_c(data & 0x1 != 0);
+        val
+    }
+
+    fn rra(cpu: &mut Self, data: u8) -> u8 {
+        let val = CPU::rol(cpu, data);
+        CPU::adc(cpu, val);
+        val
+    }
+
+    fn lsr(cpu: &mut Self, data: u8) -> u8 {
+        let val = data >> 1;
+        cpu.flags.set_nz(val);
+        cpu.flags.update_c(data & 0x01 != 0);
+        val
+    }
+
+    fn sre(cpu: &mut Self, data: u8) -> u8 {
+        let val = CPU::lsr(cpu, data);
+        CPU::eor(cpu, val);
+        val
+    }
+
+    fn dec(cpu: &mut Self, data: u8) -> u8 {
+        let val = data.wrapping_sub(1);
+        cpu.flags.set_nz(val);
+        val
+    }
+}
+
+// Control flow.
+impl CPU {
+    fn branch(take: bool, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
             0 => {
-                self.read_pc(bus); // offset
-                self.poll_intg(ctrl);
+                cpu.read_pc(bus); // offset
+                cpu.poll_intg(ctrl);
             }
             1 => {
-                self.vector = self.pc.wrapping_add((bus.data as i8) as u16);
-                bus.read(self.pc); // dummy read
+                cpu.vector = cpu.pc.wrapping_add((bus.data as i8) as u16);
+                bus.read(cpu.pc); // dummy read
                 if !take {
-                    self.fetch(bus, ctrl);
+                    cpu.fetch(bus, ctrl);
                 }
             }
             2 => {
-                bus.read(self.pc & 0xff00 | self.vector & 0xff); // dummy read
-                if self.pc & 0xff00 == self.vector & 0xff00 {
-                    self.pc = self.vector;
-                    self.fetch(bus, ctrl);
+                bus.read(cpu.pc & 0xff00 | cpu.vector & 0xff); // dummy read
+                if cpu.pc & 0xff00 == cpu.vector & 0xff00 {
+                    cpu.pc = cpu.vector;
+                    cpu.fetch(bus, ctrl);
                 } else {
-                    self.poll_intg(ctrl);
+                    cpu.poll_intg(ctrl);
                 }
             }
             3 => {
-                self.pc = self.vector;
-                self.fetch(bus, ctrl);
+                cpu.pc = cpu.vector;
+                cpu.fetch(bus, ctrl);
             }
             _ => unreachable!(),
         }
     }
 
-    fn kil(&mut self, bus: &mut Bus, ctrl: &mut Control) {
-        match self.op_cycle {
+    fn kil(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
             0 => {
-                bus.read(self.pc);
+                bus.read(cpu.pc);
             }
             1 => {
                 bus.read(0xffff);
@@ -875,172 +1055,363 @@ impl CPU {
             }
         }
     }
+
+    fn brk(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
+            0 => {
+                bus.read(cpu.pc); // dummy read
+            }
+            1 => {
+                if ctrl.res {
+                    cpu.read_sp(bus); // dummy read
+                    cpu.sp = cpu.sp.wrapping_sub(1);
+                } else {
+                    cpu.write_sp(bus, (cpu.pc >> 8) as u8);
+                }
+            }
+            2 => {
+                if ctrl.res {
+                    cpu.read_sp(bus); // dummy read
+                    cpu.sp = cpu.sp.wrapping_sub(1);
+                } else {
+                    cpu.write_sp(bus, cpu.pc as u8);
+                }
+            }
+            3 => {
+                // ??? is this here or at end of prev cycle?
+                if ctrl.res {
+                    cpu.vector = 0xfffc;
+                } else if cpu.nmi_pending || ctrl.nmi {
+                    cpu.vector = 0xfffa;
+                } else {
+                    cpu.vector = 0xfffe;
+                }
+
+                if ctrl.res {
+                    cpu.read_sp(bus); // dummy read
+                    cpu.sp = cpu.sp.wrapping_sub(1);
+                } else if cpu.intg {
+                    cpu.write_sp(bus, cpu.flags.0 & 0b1110_1111);
+                } else {
+                    cpu.write_sp(bus, cpu.flags.0 | 0b0011_0000);
+                }
+            }
+            4 => {
+                bus.read(cpu.vector); // low byte of target
+
+                // ??? is this here or at start of next cycle?
+                cpu.flags.update_i(true);
+                ctrl.res = false;
+                cpu.intg = false;
+            }
+            5 => {
+                let vec_lo = bus.data as u16;
+                bus.read(cpu.vector.wrapping_add(1)); // high byte of target
+                cpu.vector = vec_lo;
+            }
+            6 => {
+                cpu.pc = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                cpu.fetch(bus, ctrl);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn rti(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
+            0 => {
+                bus.read(cpu.pc); // dummy read
+            }
+            1 => {
+                cpu.read_sp(bus); // dummy read
+                cpu.sp = cpu.sp.wrapping_add(1);
+            }
+            2 => {
+                cpu.read_sp(bus);
+                cpu.sp = cpu.sp.wrapping_add(1);
+            }
+            3 => {
+                cpu.flags.set_from(bus.data, 0b11111111);
+                cpu.read_sp(bus); // low byte of return address
+                cpu.sp = cpu.sp.wrapping_add(1);
+            }
+            4 => {
+                cpu.vector = bus.data as u16;
+                cpu.read_sp(bus); // high byte of return address
+                cpu.poll_intg(ctrl);
+            }
+            5 => {
+                cpu.pc = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                cpu.fetch(bus, ctrl);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn jmp(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
+            0 => {
+                cpu.read_pc(bus); // low byte of target address
+            }
+            1 => {
+                cpu.vector = bus.data as u16;
+                cpu.read_pc(bus); // high byte of target address
+                cpu.poll_intg(ctrl);
+            }
+            2 => {
+                cpu.pc = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                cpu.fetch(bus, ctrl);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn jmp_ind(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
+            0 => {
+                cpu.read_pc(bus); // low byte of pointer address
+            }
+            1 => {
+                cpu.vector = bus.data as u16;
+                cpu.read_pc(bus); // high byte of pointer address
+            }
+            2 => {
+                cpu.vector = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                bus.read(cpu.vector); // low byte of target address
+            }
+            3 => {
+                bus.read(add_without_carry(cpu.vector, 1)); // high byte of target address
+                cpu.vector = bus.data as u16;
+                cpu.poll_intg(ctrl);
+            }
+            4 => {
+                cpu.pc = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                cpu.fetch(bus, ctrl);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn jsr(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
+            0 => {
+                cpu.read_pc(bus); // low byte of target
+            }
+            1 => {
+                cpu.vector = bus.data as u16;
+                cpu.read_sp(bus); // dummy read
+            }
+            2 => {
+                cpu.write_sp(bus, (cpu.pc >> 8) as u8);
+            }
+            3 => {
+                cpu.write_sp(bus, cpu.pc as u8);
+            }
+            4 => {
+                bus.read(cpu.pc); // high byte of target
+                cpu.poll_intg(ctrl);
+            }
+            5 => {
+                cpu.pc = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                cpu.fetch(bus, ctrl);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn rts(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
+            0 => {
+                bus.read(cpu.pc); // dummy read
+            }
+            1 => {
+                cpu.read_sp(bus); // dummy read
+                cpu.sp = cpu.sp.wrapping_add(1);
+            }
+            2 => {
+                cpu.read_sp(bus); // low byte of return address
+                cpu.sp = cpu.sp.wrapping_add(1);
+            }
+            3 => {
+                cpu.vector = bus.data as u16;
+                cpu.read_sp(bus); // high byte of return address
+            }
+            4 => {
+                cpu.pc = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                cpu.read_pc(bus); // dummy read
+                cpu.poll_intg(ctrl);
+            }
+            5 => {
+                cpu.fetch(bus, ctrl);
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
-// ALU instructions.
+// Stack operations.
 impl CPU {
-    fn nop(&mut self, _: u8) {}
-
-    fn lda(&mut self, data: u8) {
-        self.a = data;
-        self.flags.set_nz(self.a);
+    fn pha(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
+            0 => {
+                bus.read(cpu.pc); // dummy read
+            }
+            1 => {
+                cpu.write_sp(bus, cpu.a);
+                cpu.poll_intg(ctrl);
+            }
+            2 => {
+                cpu.fetch(bus, ctrl);
+            }
+            _ => unreachable!(),
+        }
     }
 
-    fn and(&mut self, data: u8) {
-        self.a &= data;
-        self.flags.set_nz(self.a);
+    fn pla(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
+            0 => {
+                bus.read(cpu.pc); // dummy read
+            }
+            1 => {
+                cpu.read_sp(bus); // dummy read
+                cpu.sp = cpu.sp.wrapping_add(1);
+            }
+            2 => {
+                cpu.read_sp(bus); // data
+                cpu.poll_intg(ctrl);
+            }
+            3 => {
+                cpu.a = bus.data;
+                cpu.flags.set_nz(cpu.a);
+                cpu.fetch(bus, ctrl);
+            }
+            _ => unreachable!(),
+        }
     }
 
-    fn ora(&mut self, data: u8) {
-        self.a |= data;
-        self.flags.set_nz(self.a);
+    fn php(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
+            0 => {
+                bus.read(cpu.pc); // dummy read
+            }
+            1 => {
+                cpu.write_sp(bus, cpu.flags.0 | 0b0011_0000);
+                cpu.poll_intg(ctrl);
+            }
+            2 => {
+                cpu.fetch(bus, ctrl);
+            }
+            _ => unreachable!(),
+        }
     }
 
-    fn eor(&mut self, data: u8) {
-        self.a ^= data;
-        self.flags.set_nz(self.a);
+    fn plp(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
+            0 => {
+                bus.read(cpu.pc); // dummy read
+            }
+            1 => {
+                cpu.read_sp(bus); // dummy read
+                cpu.sp = cpu.sp.wrapping_add(1);
+            }
+            2 => {
+                cpu.read_sp(bus); // data
+                cpu.poll_intg(ctrl);
+            }
+            3 => {
+                cpu.flags.set_from(bus.data, 0b11111111);
+                cpu.fetch(bus, ctrl);
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Unstable address high-byte opcodes.
+impl CPU {
+    fn ahx_izy(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
+            0 | 1 | 2 | 3 | 5 => {
+                CPU::izy_store(0, cpu, bus, ctrl);
+            }
+            4 => {
+                CPU::unstable_high_byte(|c| c.a & c.x, cpu.y, cpu, bus);
+                cpu.poll_intg(ctrl);
+            }
+            _ => unreachable!(),
+        }
     }
 
-    fn bit(&mut self, data: u8) {
-        self.flags.set_z(self.a & data);
-        self.flags.set_from(data, 0b11000000);
+    fn tas(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
+            0 | 1 | 2 | 4 => {
+                CPU::abi_store(cpu.y, 0, cpu, bus, ctrl);
+            }
+            3 => {
+                CPU::unstable_high_byte(
+                    |c| {
+                        c.sp = c.a & c.x;
+                        c.sp
+                    },
+                    cpu.y,
+                    cpu,
+                    bus,
+                );
+                cpu.poll_intg(ctrl);
+            }
+            _ => unreachable!(),
+        }
     }
 
-    fn anc(&mut self, data: u8) {
-        self.and(data);
-        self.flags.update_c(self.a & 0x80 != 0);
+    fn shy(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
+            0 | 1 | 2 | 4 => {
+                CPU::abi_store(cpu.x, 0, cpu, bus, ctrl);
+            }
+            3 => {
+                CPU::unstable_high_byte(|c| c.y, cpu.x, cpu, bus);
+                cpu.poll_intg(ctrl);
+            }
+            _ => unreachable!(),
+        }
     }
 
-    fn adc(&mut self, data: u8) {
-        if self.flags.d() {
-            self.adc_dec(data);
+    fn shx(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
+            0 | 1 | 2 | 4 => {
+                CPU::abi_store(cpu.y, 0, cpu, bus, ctrl);
+            }
+            3 => {
+                CPU::unstable_high_byte(|c| c.x, cpu.y, cpu, bus);
+                cpu.poll_intg(ctrl);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn ahx_abi(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        match cpu.op_cycle {
+            0 | 1 | 2 | 4 => {
+                CPU::abi_store(cpu.y, 0, cpu, bus, ctrl);
+            }
+            3 => {
+                CPU::unstable_high_byte(|c| c.a, cpu.y, cpu, bus);
+                cpu.poll_intg(ctrl);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn unstable_high_byte<F>(data: F, idx: u8, cpu: &mut Self, bus: &mut Bus)
+    where
+        F: Fn(&mut Self) -> u8,
+    {
+        // TODO: if rdy, don't & with hi+1?
+        let val = data(cpu) & ((cpu.vector >> 8) as u8).wrapping_add(1);
+        if bus.addr != cpu.vector.wrapping_add(idx as u16) {
+            bus.write((val as u16) << 8 | bus.addr & 0xff, val);
         } else {
-            self.adc_hex(data);
+            bus.write(bus.addr, val);
         }
-    }
-
-    fn adc_dec(&mut self, data: u8) {
-        let val = data as u16;
-        let a = self.a as u16;
-        let mut sl = (a & 0x0f)
-            .wrapping_add(val & 0x0f)
-            .wrapping_add(self.flags.c() as u16);
-        if sl >= 0x0a {
-            sl = (sl.wrapping_add(0x06) & 0x0f).wrapping_add(0x10);
-        }
-        let mut sum = (a & 0xf0).wrapping_add(val & 0xf0).wrapping_add(sl);
-        let v = !(a ^ val) & (val ^ sum) & 0x80;
-        self.flags.update_v(v != 0);
-        self.flags.set_n(sum as u8);
-
-        self.flags
-            .set_z(a.wrapping_add(val).wrapping_add(self.flags.c() as u16) as u8);
-
-        if sum >= 0xa0 {
-            sum = sum.wrapping_add(0x60);
-        }
-        self.flags.update_c(sum >= 0x100);
-        self.a = sum as u8;
-    }
-
-    fn adc_hex(&mut self, data: u8) {
-        let val = data as u16;
-        let a = self.a as u16;
-        let sum = a.wrapping_add(val).wrapping_add(self.flags.c() as u16);
-        let v = !(a ^ val) & (val ^ sum) & 0x80;
-        self.flags.update_v(v != 0);
-        self.flags.update_c(sum > 0xff);
-        self.a = sum as u8;
-        self.flags.set_nz(self.a);
-    }
-
-    fn arr(&mut self, data: u8) {
-        self.a &= data;
-        let arr = (self.a >> 1) | ((self.flags.c() as u8).wrapping_shl(7));
-        self.flags.set_nz(arr);
-
-        if self.flags.d() {
-            self.arr_dec(arr);
-        } else {
-            self.arr_hex(arr);
-        }
-    }
-
-    fn arr_dec(&mut self, data: u8) {
-        let mut val = data;
-        self.flags.update_v((val ^ self.a) & 0x40 != 0);
-        if (self.a & 0x0f) >= 0x05 {
-            val = (val.wrapping_add(0x06) & 0x0f) | (val & 0xf0);
-        }
-        self.flags.update_c((self.a & 0xf0) >= 0x50);
-        if self.flags.c() {
-            val = val.wrapping_add(0x60);
-        }
-        self.a = val;
-    }
-
-    fn arr_hex(&mut self, data: u8) {
-        self.flags.update_c((data & 0x40) != 0);
-        self.flags
-            .update_v((data & 0x40) ^ ((data & 0x20) << 1) != 0);
-        self.a = data;
-    }
-
-    fn asl(&mut self, data: u8) -> u8 {
-        let val = data.wrapping_shl(1);
-        self.flags.set_nz(val);
-        self.flags.update_c(data & 0x80 != 0);
-        val
-    }
-
-    fn slo(&mut self, data: u8) -> u8 {
-        let val = self.asl(data);
-        self.ora(val);
-        val
-    }
-
-    fn rol(&mut self, data: u8) -> u8 {
-        let val = data.wrapping_shl(1) | self.flags.c() as u8;
-        self.flags.set_nz(val);
-        self.flags.update_c(data & 0x80 != 0);
-        val
-    }
-
-    fn rla(&mut self, data: u8) -> u8 {
-        let val = self.rol(data);
-        self.and(val);
-        val
-    }
-
-    fn ror(&mut self, data: u8) -> u8 {
-        let val = (data >> 1) | (self.flags.c() as u8).wrapping_shl(7);
-        self.flags.set_nz(val);
-        self.flags.update_c(data & 0x1 != 0);
-        val
-    }
-
-    fn rra(&mut self, data: u8) -> u8 {
-        let val = self.rol(data);
-        self.adc(val);
-        val
-    }
-
-    fn lsr(&mut self, data: u8) -> u8 {
-        let val = data >> 1;
-        self.flags.set_nz(val);
-        self.flags.update_c(data & 0x01 != 0);
-        val
-    }
-
-    fn sre(&mut self, data: u8) -> u8 {
-        let val = self.lsr(data);
-        self.eor(val);
-        val
-    }
-
-    fn dec(&mut self, data: u8) -> u8 {
-        let val = data.wrapping_sub(1);
-        self.flags.set_nz(val);
-        val
     }
 }
