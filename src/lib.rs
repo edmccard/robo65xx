@@ -110,6 +110,14 @@ impl Flags {
         self.0 & 0b00001000 != 0
     }
 
+    fn update_d(&mut self, bit: bool) {
+        if bit {
+            self.0 |= 0b00001000;
+        } else {
+            self.0 &= 0b11110111;
+        }
+    }
+
     pub fn i(&self) -> bool {
         self.0 & 0b00000100 != 0
     }
@@ -295,6 +303,50 @@ fn add_without_carry(a: u16, b: u8) -> u16 {
     a.wrapping_add(b as u16) & 0xff00
 }
 
+trait ALU<Args> {
+    fn run(&self, data: u8, cpu: &mut CPU, bus: &mut Bus, ctrl: &mut Control);
+}
+
+impl<F> ALU<(u8, &mut CPU)> for F
+where
+    F: Fn(u8, &mut CPU),
+{
+    fn run(&self, data: u8, cpu: &mut CPU, _: &mut Bus, _: &mut Control) {
+        self(data, cpu);
+    }
+}
+
+impl<F> ALU<(u8, &mut CPU, &mut Bus, &mut Control)> for F
+where
+    F: Fn(u8, &mut CPU, &mut Bus, &mut Control),
+{
+    fn run(&self, data: u8, cpu: &mut CPU, bus: &mut Bus, ctrl: &mut Control) {
+        self(data, cpu, bus, ctrl);
+    }
+}
+
+trait RMW<Args> {
+    fn run(&self, data: u8, cpu: &mut CPU, bus: &mut Bus, ctrl: &mut Control) -> u8;
+}
+
+impl<F> RMW<(u8, &mut CPU)> for F
+where
+    F: Fn(u8, &mut CPU) -> u8,
+{
+    fn run(&self, data: u8, cpu: &mut CPU, _: &mut Bus, _: &mut Control) -> u8 {
+        self(data, cpu)
+    }
+}
+
+impl<F> RMW<(u8, &mut CPU, &mut Bus, &mut Control)> for F
+where
+    F: Fn(u8, &mut CPU, &mut Bus, &mut Control) -> u8,
+{
+    fn run(&self, data: u8, cpu: &mut CPU, bus: &mut Bus, ctrl: &mut Control) -> u8 {
+        self(data, cpu, bus, ctrl)
+    }
+}
+
 // Addressing modes.
 impl CPU {
     fn implicit<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
@@ -314,10 +366,7 @@ impl CPU {
         }
     }
 
-    fn imm_alu<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
-    where
-        F: Fn(&mut Self, u8),
-    {
+    fn imm_alu<Args>(op: impl ALU<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // operand
@@ -325,16 +374,13 @@ impl CPU {
             }
             _ => {
                 debug_assert_eq!(1, cpu.op_cycle);
-                op(cpu, bus.data);
+                op.run(bus.data, cpu, bus, ctrl);
                 cpu.fetch(bus, ctrl);
             }
         }
     }
 
-    fn zp_alu<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
-    where
-        F: Fn(&mut Self, u8),
-    {
+    fn zp_alu<Args>(op: impl ALU<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // zero-page address
@@ -345,7 +391,7 @@ impl CPU {
             }
             _ => {
                 debug_assert_eq!(2, cpu.op_cycle);
-                op(cpu, bus.data);
+                op.run(bus.data, cpu, bus, ctrl);
                 cpu.fetch(bus, ctrl);
             }
         }
@@ -367,10 +413,7 @@ impl CPU {
         }
     }
 
-    fn zp_rmw<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
-    where
-        F: Fn(&mut Self, u8) -> u8,
-    {
+    fn zp_rmw<Args>(op: impl RMW<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // zero-page address
@@ -382,7 +425,8 @@ impl CPU {
                 bus.write(bus.addr, bus.data); // dummy write
             }
             3 => {
-                bus.write(bus.addr, op(cpu, bus.data));
+                let data = op.run(bus.data, cpu, bus, ctrl);
+                bus.write(bus.addr, data);
                 cpu.poll_intg(ctrl);
             }
             _ => {
@@ -392,10 +436,7 @@ impl CPU {
         }
     }
 
-    fn abs_alu<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
-    where
-        F: Fn(&mut Self, u8),
-    {
+    fn abs_alu<Args>(op: impl ALU<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // low byte of address
@@ -410,7 +451,7 @@ impl CPU {
             }
             _ => {
                 debug_assert_eq!(3, cpu.op_cycle);
-                op(cpu, bus.data);
+                op.run(bus.data, cpu, bus, ctrl);
                 cpu.fetch(bus, ctrl);
             }
         }
@@ -436,10 +477,7 @@ impl CPU {
         }
     }
 
-    fn abs_rmw<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
-    where
-        F: Fn(&mut Self, u8) -> u8,
-    {
+    fn abs_rmw<Args>(op: impl RMW<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // low byte of address
@@ -455,7 +493,8 @@ impl CPU {
                 bus.write(bus.addr, bus.data); // dummy write
             }
             4 => {
-                bus.write(bus.addr, op(cpu, bus.data));
+                let data = op.run(bus.data, cpu, bus, ctrl);
+                bus.write(bus.addr, data);
                 cpu.poll_intg(ctrl);
             }
             _ => {
@@ -465,10 +504,13 @@ impl CPU {
         }
     }
 
-    fn zpi_alu<F>(idx: u8, op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
-    where
-        F: Fn(&mut Self, u8),
-    {
+    fn zpi_alu<Args>(
+        idx: u8,
+        op: impl ALU<Args>,
+        cpu: &mut Self,
+        bus: &mut Bus,
+        ctrl: &mut Control,
+    ) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // base zero-page address
@@ -483,7 +525,7 @@ impl CPU {
             }
             _ => {
                 debug_assert_eq!(3, cpu.op_cycle);
-                op(cpu, bus.data);
+                op.run(bus.data, cpu, bus, ctrl);
                 cpu.fetch(bus, ctrl);
             }
         }
@@ -509,10 +551,13 @@ impl CPU {
         }
     }
 
-    fn zpi_rmw<F>(idx: u8, op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
-    where
-        F: Fn(&mut Self, u8) -> u8,
-    {
+    fn zpi_rmw<Args>(
+        idx: u8,
+        op: impl RMW<Args>,
+        cpu: &mut Self,
+        bus: &mut Bus,
+        ctrl: &mut Control,
+    ) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // base zero-page address
@@ -528,7 +573,8 @@ impl CPU {
                 bus.write(bus.addr, bus.data); // dummy write
             }
             4 => {
-                bus.write(bus.addr, op(cpu, bus.data));
+                let data = op.run(bus.data, cpu, bus, ctrl);
+                bus.write(bus.addr, data);
                 cpu.poll_intg(ctrl);
             }
             _ => {
@@ -538,10 +584,13 @@ impl CPU {
         }
     }
 
-    fn abi_alu<F>(idx: u8, op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
-    where
-        F: Fn(&mut Self, u8),
-    {
+    fn abi_alu<Args>(
+        idx: u8,
+        op: impl ALU<Args>,
+        cpu: &mut Self,
+        bus: &mut Bus,
+        ctrl: &mut Control,
+    ) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // low byte of address
@@ -566,7 +615,7 @@ impl CPU {
             }
             _ => {
                 debug_assert_eq!(4, cpu.op_cycle);
-                op(cpu, bus.data);
+                op.run(bus.data, cpu, bus, ctrl);
                 cpu.fetch(bus, ctrl);
             }
         }
@@ -596,10 +645,13 @@ impl CPU {
         }
     }
 
-    fn abi_rmw<F>(idx: u8, op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
-    where
-        F: Fn(&mut Self, u8) -> u8,
-    {
+    fn abi_rmw<Args>(
+        idx: u8,
+        op: impl RMW<Args>,
+        cpu: &mut Self,
+        bus: &mut Bus,
+        ctrl: &mut Control,
+    ) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // low byte of address
@@ -619,7 +671,8 @@ impl CPU {
                 bus.write(bus.addr, bus.data); // dummy write
             }
             5 => {
-                bus.write(bus.addr, op(cpu, bus.data));
+                let data = op.run(bus.data, cpu, bus, ctrl);
+                bus.write(bus.addr, data);
                 cpu.poll_intg(ctrl);
             }
             _ => {
@@ -629,10 +682,7 @@ impl CPU {
         }
     }
 
-    fn izx_alu<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
-    where
-        F: Fn(&mut Self, u8),
-    {
+    fn izx_alu<Args>(op: impl ALU<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // base zero-page pointer to address
@@ -654,7 +704,7 @@ impl CPU {
             }
             _ => {
                 debug_assert_eq!(5, cpu.op_cycle);
-                op(cpu, bus.data);
+                op.run(bus.data, cpu, bus, ctrl);
                 cpu.fetch(bus, ctrl);
             }
         }
@@ -687,10 +737,7 @@ impl CPU {
         }
     }
 
-    fn izx_rmw<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
-    where
-        F: Fn(&mut Self, u8) -> u8,
-    {
+    fn izx_rmw<Args>(op: impl RMW<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // base zero-page pointer to address
@@ -713,7 +760,8 @@ impl CPU {
                 bus.write(bus.addr, bus.data); // dummy write
             }
             6 => {
-                bus.write(bus.addr, op(cpu, bus.data));
+                let data = op.run(bus.data, cpu, bus, ctrl);
+                bus.write(bus.addr, data);
                 cpu.poll_intg(ctrl);
             }
             _ => {
@@ -723,10 +771,7 @@ impl CPU {
         }
     }
 
-    fn izy_alu<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
-    where
-        F: Fn(&mut Self, u8),
-    {
+    fn izy_alu<Args>(op: impl ALU<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // zero-page pointer to base address
@@ -755,7 +800,7 @@ impl CPU {
             }
             _ => {
                 debug_assert_eq!(5, cpu.op_cycle);
-                op(cpu, bus.data);
+                op.run(bus.data, cpu, bus, ctrl);
                 cpu.fetch(bus, ctrl);
             }
         }
@@ -789,10 +834,7 @@ impl CPU {
         }
     }
 
-    fn izy_rmw<F>(op: F, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
-    where
-        F: Fn(&mut Self, u8) -> u8,
-    {
+    fn izy_rmw<Args>(op: impl RMW<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // zero-page pointer to base address
@@ -816,7 +858,8 @@ impl CPU {
                 bus.write(bus.addr, bus.data); // dummy write
             }
             6 => {
-                bus.write(bus.addr, op(cpu, bus.data));
+                let data = op.run(bus.data, cpu, bus, ctrl);
+                bus.write(bus.addr, data);
                 cpu.poll_intg(ctrl);
             }
             _ => {
@@ -829,85 +872,97 @@ impl CPU {
 
 // ALU operations.
 impl CPU {
-    fn nop(_: &mut Self, _: u8) {}
+    fn nop(_: u8, _: &mut Self) {}
 
-    fn lda(cpu: &mut Self, data: u8) {
+    fn lda(data: u8, cpu: &mut Self) {
         cpu.a = data;
         cpu.flags.set_nz(cpu.a);
     }
 
-    fn ldx(cpu: &mut Self, data: u8) {
+    fn xaa(data: u8, cpu: &mut Self, _: &mut Bus, ctrl: &mut Control) {
+        // TODO: 0xee if RDY
+        CPU::lda((cpu.a | 0xef) & cpu.x & data, cpu);
+    }
+
+    fn ldx(data: u8, cpu: &mut Self) {
         cpu.x = data;
         cpu.flags.set_nz(cpu.x);
     }
 
-    fn lax(cpu: &mut Self, data: u8) {
+    fn lax(data: u8, cpu: &mut Self) {
         cpu.x = data;
         cpu.a = data;
         cpu.flags.set_nz(cpu.x);
     }
 
-    fn las(cpu: &mut Self, data: u8) {
+    fn las(data: u8, cpu: &mut Self) {
         cpu.sp &= data;
         cpu.a = cpu.sp;
         cpu.x = cpu.sp;
         cpu.flags.set_nz(cpu.a);
     }
 
-    fn ldy(cpu: &mut Self, data: u8) {
+    fn ldy(data: u8, cpu: &mut Self) {
         cpu.y = data;
         cpu.flags.set_nz(cpu.y);
     }
 
-    fn and(cpu: &mut Self, data: u8) {
+    fn and(data: u8, cpu: &mut Self) {
         cpu.a &= data;
         cpu.flags.set_nz(cpu.a);
     }
 
-    fn ora(cpu: &mut Self, data: u8) {
+    fn ora(data: u8, cpu: &mut Self) {
         cpu.a |= data;
         cpu.flags.set_nz(cpu.a);
     }
 
-    fn eor(cpu: &mut Self, data: u8) {
+    fn eor(data: u8, cpu: &mut Self) {
         cpu.a ^= data;
         cpu.flags.set_nz(cpu.a);
     }
 
-    fn bit(cpu: &mut Self, data: u8) {
+    fn bit(data: u8, cpu: &mut Self) {
         cpu.flags.set_z(cpu.a & data);
         cpu.flags.set_from(data, 0b11000000);
     }
 
-    fn cmp(cpu: &mut Self, data: u8) {
+    fn cmp(data: u8, cpu: &mut Self) {
         cpu.flags.set_nz(cpu.a.wrapping_sub(data));
         cpu.flags.update_c(data <= cpu.a);
     }
 
-    fn cpx(cpu: &mut Self, data: u8) {
+    fn cpx(data: u8, cpu: &mut Self) {
         cpu.flags.set_nz(cpu.x.wrapping_sub(data));
         cpu.flags.update_c(data <= cpu.x);
     }
 
-    fn cpy(cpu: &mut Self, data: u8) {
+    fn cpy(data: u8, cpu: &mut Self) {
         cpu.flags.set_nz(cpu.y.wrapping_sub(data));
         cpu.flags.update_c(data <= cpu.y);
     }
 
-    fn anc(cpu: &mut Self, data: u8) {
-        CPU::and(cpu, data);
+    fn sbx(data: u8, cpu: &mut Self) {
+        cpu.x &= cpu.a;
+        cpu.flags.update_c(cpu.x >= data);
+        cpu.x = cpu.x.wrapping_sub(data);
+        cpu.flags.set_nz(cpu.x);
+    }
+
+    fn anc(data: u8, cpu: &mut Self) {
+        CPU::and(data, cpu);
         cpu.flags.update_c(cpu.a & 0x80 != 0);
     }
 
-    fn adc(cpu: &mut Self, data: u8) {
+    fn adc(data: u8, cpu: &mut Self) {
         if cpu.flags.d() {
-            CPU::adc_dec(cpu, data);
+            CPU::adc_dec(data, cpu);
         } else {
-            CPU::adc_hex(cpu, data);
+            CPU::adc_hex(data, cpu);
         }
     }
 
-    fn adc_dec(cpu: &mut Self, data: u8) {
+    fn adc_dec(data: u8, cpu: &mut Self) {
         let val = data as u16;
         let a = cpu.a as u16;
         let mut sl = (a & 0x0f)
@@ -931,7 +986,7 @@ impl CPU {
         cpu.a = sum as u8;
     }
 
-    fn adc_hex(cpu: &mut Self, data: u8) {
+    fn adc_hex(data: u8, cpu: &mut Self) {
         let val = data as u16;
         let a = cpu.a as u16;
         let sum = a.wrapping_add(val).wrapping_add(cpu.flags.c() as u16);
@@ -942,19 +997,19 @@ impl CPU {
         cpu.flags.set_nz(cpu.a);
     }
 
-    fn arr(cpu: &mut Self, data: u8) {
+    fn arr(data: u8, cpu: &mut Self) {
         cpu.a &= data;
         let arr = (cpu.a >> 1) | ((cpu.flags.c() as u8).wrapping_shl(7));
         cpu.flags.set_nz(arr);
 
         if cpu.flags.d() {
-            CPU::arr_dec(cpu, arr);
+            CPU::arr_dec(arr, cpu);
         } else {
-            CPU::arr_hex(cpu, arr);
+            CPU::arr_hex(arr, cpu);
         }
     }
 
-    fn arr_dec(cpu: &mut Self, data: u8) {
+    fn arr_dec(data: u8, cpu: &mut Self) {
         let mut val = data;
         cpu.flags.update_v((val ^ cpu.a) & 0x40 != 0);
         if (cpu.a & 0x0f) >= 0x05 {
@@ -967,68 +1022,80 @@ impl CPU {
         cpu.a = val;
     }
 
-    fn arr_hex(cpu: &mut Self, data: u8) {
+    fn arr_hex(data: u8, cpu: &mut Self) {
         cpu.flags.update_c((data & 0x40) != 0);
         cpu.flags
             .update_v((data & 0x40) ^ ((data & 0x20) << 1) != 0);
         cpu.a = data;
     }
 
-    fn asl(cpu: &mut Self, data: u8) -> u8 {
+    fn inc(data: u8, cpu: &mut Self) -> u8 {
+        let val = data.wrapping_add(1);
+        cpu.flags.set_nz(val);
+        val
+    }
+
+    fn dec(data: u8, cpu: &mut Self) -> u8 {
+        let val = data.wrapping_sub(1);
+        cpu.flags.set_nz(val);
+        val
+    }
+
+    fn dcp(data: u8, cpu: &mut Self, bus: &mut Bus, _: &mut Control) -> u8 {
+        let val = CPU::dec(data, cpu);
+        CPU::cmp(bus.addr as u8, cpu);
+        val
+    }
+
+    fn asl(data: u8, cpu: &mut Self) -> u8 {
         let val = data.wrapping_shl(1);
         cpu.flags.set_nz(val);
         cpu.flags.update_c(data & 0x80 != 0);
         val
     }
 
-    fn slo(cpu: &mut Self, data: u8) -> u8 {
-        let val = CPU::asl(cpu, data);
-        CPU::ora(cpu, val);
+    fn slo(data: u8, cpu: &mut Self) -> u8 {
+        let val = CPU::asl(data, cpu);
+        CPU::ora(val, cpu);
         val
     }
 
-    fn rol(cpu: &mut Self, data: u8) -> u8 {
+    fn rol(data: u8, cpu: &mut Self) -> u8 {
         let val = data.wrapping_shl(1) | cpu.flags.c() as u8;
         cpu.flags.set_nz(val);
         cpu.flags.update_c(data & 0x80 != 0);
         val
     }
 
-    fn rla(cpu: &mut Self, data: u8) -> u8 {
-        let val = CPU::rol(cpu, data);
-        CPU::and(cpu, val);
+    fn rla(data: u8, cpu: &mut Self) -> u8 {
+        let val = CPU::rol(data, cpu);
+        CPU::and(val, cpu);
         val
     }
 
-    fn ror(cpu: &mut Self, data: u8) -> u8 {
+    fn ror(data: u8, cpu: &mut Self) -> u8 {
         let val = (data >> 1) | (cpu.flags.c() as u8).wrapping_shl(7);
         cpu.flags.set_nz(val);
         cpu.flags.update_c(data & 0x1 != 0);
         val
     }
 
-    fn rra(cpu: &mut Self, data: u8) -> u8 {
-        let val = CPU::rol(cpu, data);
-        CPU::adc(cpu, val);
+    fn rra(data: u8, cpu: &mut Self) -> u8 {
+        let val = CPU::rol(data, cpu);
+        CPU::adc(val, cpu);
         val
     }
 
-    fn lsr(cpu: &mut Self, data: u8) -> u8 {
+    fn lsr(data: u8, cpu: &mut Self) -> u8 {
         let val = data >> 1;
         cpu.flags.set_nz(val);
         cpu.flags.update_c(data & 0x01 != 0);
         val
     }
 
-    fn sre(cpu: &mut Self, data: u8) -> u8 {
-        let val = CPU::lsr(cpu, data);
-        CPU::eor(cpu, val);
-        val
-    }
-
-    fn dec(cpu: &mut Self, data: u8) -> u8 {
-        let val = data.wrapping_sub(1);
-        cpu.flags.set_nz(val);
+    fn sre(data: u8, cpu: &mut Self) -> u8 {
+        let val = CPU::lsr(data, cpu);
+        CPU::eor(val, cpu);
         val
     }
 }
@@ -1356,7 +1423,7 @@ impl CPU {
     }
 }
 
-// Opcodes that depend on the state of RDY.
+// Operations that depend on the bus or the control signals.
 impl CPU {
     fn ahx_izy(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
@@ -1434,21 +1501,6 @@ impl CPU {
             bus.write((val as u16) << 8 | bus.addr & 0xff, val);
         } else {
             bus.write(bus.addr, val);
-        }
-    }
-
-    fn xaa(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
-        match cpu.op_cycle {
-            0 => {
-                bus.read(cpu.pc); // dummy read
-                cpu.poll_intg(ctrl);
-            }
-            _ => {
-                debug_assert_eq!(1, cpu.op_cycle);
-                // TODO: 0xee if RDY
-                CPU::lda(cpu, (cpu.a | 0xef) & cpu.x & bus.data);
-                cpu.fetch(bus, ctrl);
-            }
         }
     }
 }
