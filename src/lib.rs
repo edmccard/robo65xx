@@ -997,6 +997,49 @@ impl CPU {
         cpu.flags.set_nz(cpu.a);
     }
 
+    fn sbc(data: u8, cpu: &mut Self) {
+        if cpu.flags.d() {
+            CPU::sbc_dec(data, cpu);
+        } else {
+            CPU::sbc_hex(data, cpu);
+        }
+    }
+
+    fn sbc_dec(data: u8, cpu: &mut Self) {
+        let val = data as u16;
+        let a = cpu.a as u16;
+        let bdiff = a.wrapping_sub(val).wrapping_sub(!cpu.flags.c() as u16);
+        let v = (a ^ bdiff) & (a ^ val) & 0x80;
+        cpu.flags.update_v(v != 0);
+        cpu.flags.set_nz(bdiff as u8);
+
+        let val = val as i16;
+        let mut dl = (a as i16 & 0x0f)
+            .wrapping_sub(val & 0x0f)
+            .wrapping_sub(!cpu.flags.c() as i16);
+        if dl < 0 {
+            dl = (dl.wrapping_sub(0x06) & 0x0f).wrapping_sub(0x10);
+        }
+        let mut diff = (a as i16 & 0xf0).wrapping_sub(val & 0xf0).wrapping_add(dl);
+        if diff < 0 {
+            diff = diff.wrapping_sub(0x60);
+        }
+
+        cpu.flags.update_c(bdiff < 0x100);
+        cpu.a = diff as u16 as u8;
+    }
+
+    fn sbc_hex(data: u8, cpu: &mut Self) {
+        let val = data as u16;
+        let a = cpu.a as u16;
+        let diff = a.wrapping_sub(val).wrapping_sub(!cpu.flags.c() as u16);
+        let v = (a ^ diff) & (a ^ val) & 0x80;
+        cpu.flags.update_v(v != 0);
+        cpu.flags.update_c(diff < 0x100);
+        cpu.a = diff as u8;
+        cpu.flags.set_nz(cpu.a);
+    }
+
     fn arr(data: u8, cpu: &mut Self) {
         cpu.a &= data;
         let arr = (cpu.a >> 1) | ((cpu.flags.c() as u8).wrapping_shl(7));
@@ -1025,13 +1068,19 @@ impl CPU {
     fn arr_hex(data: u8, cpu: &mut Self) {
         cpu.flags.update_c((data & 0x40) != 0);
         cpu.flags
-            .update_v((data & 0x40) ^ ((data & 0x20) << 1) != 0);
+            .update_v((data & 0x40) ^ ((data & 0x20).wrapping_shl(1)) != 0);
         cpu.a = data;
     }
 
     fn inc(data: u8, cpu: &mut Self) -> u8 {
         let val = data.wrapping_add(1);
         cpu.flags.set_nz(val);
+        val
+    }
+
+    fn isc(data: u8, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) -> u8 {
+        let val = CPU::inc(data, cpu);
+        CPU::sbc(bus.addr as u8, cpu);
         val
     }
 
@@ -1498,7 +1547,7 @@ impl CPU {
         // TODO: if rdy, don't & with hi+1?
         let val = data(cpu) & ((cpu.vector >> 8) as u8).wrapping_add(1);
         if bus.addr != cpu.vector.wrapping_add(idx as u16) {
-            bus.write((val as u16) << 8 | bus.addr & 0xff, val);
+            bus.write((val as u16).wrapping_shl(8) | bus.addr & 0xff, val);
         } else {
             bus.write(bus.addr, val);
         }
