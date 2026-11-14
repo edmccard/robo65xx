@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn exec(cpu: &mut CPU, bus: &mut Bus, ctrl: &mut Control) {
+pub fn exec(cpu: &mut CPU, bus: &mut Bus, ctrl: &mut Control) {
     match cpu.op {
         0x00 => CPU::brk(cpu, bus, ctrl),
         0x01 => CPU::izx_alu(CPU::ora, cpu, bus, ctrl),

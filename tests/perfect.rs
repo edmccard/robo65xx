@@ -27,15 +27,8 @@ unsafe extern "C" {
 struct P6502(*mut c_void);
 
 impl P6502 {
-    fn new(mem: &mut [u8]) -> Self {
-        let mut cpu = unsafe {
-            let state = initAndResetChip();
-            Self(state)
-        };
-        for _ in 0..18 {
-            cpu.step(mem);
-        }
-        cpu
+    fn new() -> Self {
+        unsafe { Self(initAndResetChip()) }
     }
 
     fn step(&mut self, mem: &mut [u8]) {
@@ -138,11 +131,19 @@ impl P6502 {
     }
 }
 
+impl Drop for P6502 {
+    fn drop(&mut self) {
+        unsafe {
+            destroyChip(self.0);
+        }
+    }
+}
+
 impl Display for P6502 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} {}{}{} {} {:04x} {:02x} {} : {:04x} {:02x} {:02x} {:02x} {:02x} {:02x} {} {}",
+            "{} {}{}{}  {} {:04x} {:02x} {} : {:04x} {:02x} {:02x} {:02x} {:02x} {:02x} {} {}",
             if self.sync() { "S" } else { "s" },
             if self.res() { "R" } else { "r" },
             if self.nmi() { "N" } else { "n" },
@@ -169,29 +170,57 @@ impl Display for P6502 {
     }
 }
 
-fn start_cpus(pmem: &mut [u8], rmem: &mut [u8]) -> (P6502, CPU, Control, Bus) {
-    let pcpu = P6502::new(pmem);
+struct Harness {
+    cpu: CPU,
+    bus: Bus,
+    ctrl: Control,
+    p6502: P6502,
+    mem: [u8; 65536],
+    pmem: [u8; 65536],
+}
 
-    let mut ctrl = Control::init();
-    let mut bus = Bus::new();
-    let mut cpu = CPU::init(&bus, &mut ctrl);
-    for _ in 0..7 {
-        cpu.tick(&mut bus, &mut ctrl);
-        if bus.rw() {
-            bus.data = rmem[bus.addr as usize];
+impl Harness {
+    fn init(memory: &[u8]) -> Self {
+        let mut cpu = CPU::new(None);
+        let mut bus = Bus::new(0, 0);
+        let mut ctrl = Control::new();
+        ctrl.res = false;
+        bus.addr = 0;
+        bus.data = memory[0];
+        let mut p6502 = P6502::new();
+        let mut mem = [0u8; 65536];
+        let mut pmem = [0u8; 65536];
+        mem[0..memory.len()].copy_from_slice(memory);
+        pmem[0..memory.len()].copy_from_slice(memory);
+        let mut h = Self {
+            cpu,
+            bus,
+            ctrl,
+            p6502,
+            mem,
+            pmem,
+        };
+        for _ in 0..9 {
+            h.p_tick();
+        }
+        for _ in 0..7 {
+            h.r_tick();
+        }
+        h
+    }
+
+    fn r_tick(&mut self) {
+        self.cpu.tick(&mut self.bus, &mut self.ctrl, nmos::exec);
+        if self.bus.rw() {
+            self.bus.data = self.mem[self.bus.addr as usize];
         } else {
-            rmem[bus.addr as usize] = bus.data;
+            self.mem[self.bus.addr as usize] = self.bus.data;
         }
     }
 
-    (pcpu, cpu, ctrl, bus)
-}
-
-impl Drop for P6502 {
-    fn drop(&mut self) {
-        unsafe {
-            destroyChip(self.0);
-        }
+    fn p_tick(&mut self) {
+        self.p6502.step(&mut self.pmem);
+        self.p6502.step(&mut self.pmem);
     }
 }
 
@@ -199,10 +228,19 @@ use robo65xx::*;
 
 #[test]
 fn test_1() {
-    let mut pmem = [0u8; 65536];
-    let mut rmem = [0u8; 65536];
-    pmem[0] = 0xa9;
-    let (mut pcpu, cpu, ctrl, bus) = start_cpus(&mut pmem, &mut rmem);
-    println!("P {}", pcpu);
-    println!("R {} {} {}", &ctrl, &bus, &cpu);
+    let mut memory = [0xa9, 0xff, 0xa9, 0xaa];
+    let mut h = Harness::init(&memory);
+
+    h.p_tick();
+    h.r_tick();
+    println!("R {} {} {}", &h.ctrl, &h.bus, &h.cpu);
+    println!("P {}", h.p6502);
+    h.p_tick();
+    h.r_tick();
+    println!("R {} {} {}", &h.ctrl, &h.bus, &h.cpu);
+    println!("P {}", h.p6502);
+    h.p_tick();
+    h.r_tick();
+    println!("R {} {} {}", &h.ctrl, &h.bus, &h.cpu);
+    println!("P {}", h.p6502);
 }

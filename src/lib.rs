@@ -1,8 +1,7 @@
-use std::fmt::Display;
+use std::{fmt::Display, ptr::fn_addr_eq};
 
-mod ops;
+pub mod nmos;
 
-#[derive(Default)]
 pub struct Bus {
     pub addr: u16,
     pub data: u8,
@@ -10,8 +9,12 @@ pub struct Bus {
 }
 
 impl Bus {
-    pub fn new() -> Self {
-        Default::default()
+    pub fn new(addr: u16, data: u8) -> Self {
+        Self {
+            addr,
+            data,
+            write: false,
+        }
     }
 
     pub fn rw(&self) -> bool {
@@ -42,24 +45,23 @@ impl Display for Bus {
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub struct Control {
     sync: bool,
     pub irq: bool,
     pub nmi: bool,
     pub res: bool,
+    pub rdy: bool,
 }
 
 impl Control {
     pub fn new() -> Self {
-        Default::default()
-    }
-
-    pub fn init() -> Self {
         Self {
             sync: true,
-            res: true,
-            ..Default::default()
+            irq: false,
+            nmi: false,
+            res: false,
+            rdy: false,
         }
     }
 
@@ -72,11 +74,12 @@ impl Display for Control {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} {}{}{}",
+            "{} {}{}{}{}",
             if self.sync { "S" } else { "s" },
             if self.res { "R" } else { "r" },
             if self.nmi { "N" } else { "n" },
             if self.irq { "I" } else { "i" },
+            if self.rdy { "*" } else { "," },
         )
     }
 }
@@ -182,6 +185,14 @@ impl Display for Flags {
     }
 }
 
+pub struct Regs {
+    pub a: u8,
+    pub x: u8,
+    pub y: u8,
+    pub sp: u8,
+    pub flags: u8,
+}
+
 pub struct CPU {
     // The current cycle of the current instruction.
     op_cycle: u64,
@@ -221,14 +232,14 @@ impl Display for CPU {
 }
 
 impl CPU {
-    pub fn init(bus: &Bus, ctrl: &mut Control) -> Self {
+    pub fn new(regs: Option<Regs>) -> Self {
         let mut cpu = Self {
-            pc: bus.addr,
-            flags: Flags(0x2),
+            pc: 0,
+            flags: Flags(0b110),
             op_cycle: 0,
             vector: 0,
             a: 0,
-            x: 0,
+            x: 0xc0,
             y: 0,
             sp: 0xc0,
             op: 0,
@@ -236,23 +247,27 @@ impl CPU {
             nmi_pending: false,
             intg: false,
         };
-        if ctrl.res {
-            cpu.intg = true;
+        if let Some(regs) = regs {
+            cpu.a = regs.a;
+            cpu.x = regs.x;
+            cpu.y = regs.y;
+            cpu.sp = regs.sp;
+            cpu.flags.set_from(regs.flags, 0b11111111);
         } else {
-            cpu.flags.update_i(true);
-            cpu.sp = cpu.sp.wrapping_sub(3);
+            cpu.intg = true;
         }
-        ctrl.sync = true;
         cpu
     }
 
-    pub fn tick(&mut self, bus: &mut Bus, ctrl: &mut Control) {
+    pub fn tick<F>(&mut self, bus: &mut Bus, ctrl: &mut Control, exec: F)
+    where
+        F: Fn(&mut CPU, &mut Bus, &mut Control),
+    {
         if ctrl.sync {
-            let op = bus.data;
             if self.intg {
                 self.op = 0x00;
             } else {
-                self.op = op;
+                self.op = bus.data;
                 self.pc = self.pc.wrapping_add(1);
             }
             self.op_cycle = 0;
@@ -261,7 +276,7 @@ impl CPU {
             self.op_cycle += 1;
         }
 
-        ops::exec(self, bus, ctrl);
+        exec(self, bus, ctrl);
 
         self.irq_pending = ctrl.irq;
         if ctrl.nmi {
@@ -303,11 +318,11 @@ fn add_without_carry(a: u16, b: u8) -> u16 {
     a.wrapping_add(b as u16) & 0xff00
 }
 
-trait ALU<Args> {
+trait Alu<Args> {
     fn run(&self, data: u8, cpu: &mut CPU, bus: &mut Bus, ctrl: &mut Control);
 }
 
-impl<F> ALU<(u8, &mut CPU)> for F
+impl<F> Alu<(u8, &mut CPU)> for F
 where
     F: Fn(u8, &mut CPU),
 {
@@ -316,7 +331,7 @@ where
     }
 }
 
-impl<F> ALU<(u8, &mut CPU, &mut Bus, &mut Control)> for F
+impl<F> Alu<(u8, &mut CPU, &mut Bus, &mut Control)> for F
 where
     F: Fn(u8, &mut CPU, &mut Bus, &mut Control),
 {
@@ -325,11 +340,11 @@ where
     }
 }
 
-trait RMW<Args> {
+trait Rmw<Args> {
     fn run(&self, data: u8, cpu: &mut CPU, bus: &mut Bus, ctrl: &mut Control) -> u8;
 }
 
-impl<F> RMW<(u8, &mut CPU)> for F
+impl<F> Rmw<(u8, &mut CPU)> for F
 where
     F: Fn(u8, &mut CPU) -> u8,
 {
@@ -338,7 +353,7 @@ where
     }
 }
 
-impl<F> RMW<(u8, &mut CPU, &mut Bus, &mut Control)> for F
+impl<F> Rmw<(u8, &mut CPU, &mut Bus, &mut Control)> for F
 where
     F: Fn(u8, &mut CPU, &mut Bus, &mut Control) -> u8,
 {
@@ -366,7 +381,7 @@ impl CPU {
         }
     }
 
-    fn imm_alu<Args>(op: impl ALU<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+    fn imm_alu<Args>(op: impl Alu<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // operand
@@ -380,7 +395,7 @@ impl CPU {
         }
     }
 
-    fn zp_alu<Args>(op: impl ALU<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+    fn zp_alu<Args>(op: impl Alu<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // zero-page address
@@ -413,7 +428,7 @@ impl CPU {
         }
     }
 
-    fn zp_rmw<Args>(op: impl RMW<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+    fn zp_rmw<Args>(op: impl Rmw<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // zero-page address
@@ -436,7 +451,7 @@ impl CPU {
         }
     }
 
-    fn abs_alu<Args>(op: impl ALU<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+    fn abs_alu<Args>(op: impl Alu<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // low byte of address
@@ -477,7 +492,7 @@ impl CPU {
         }
     }
 
-    fn abs_rmw<Args>(op: impl RMW<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+    fn abs_rmw<Args>(op: impl Rmw<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // low byte of address
@@ -506,7 +521,7 @@ impl CPU {
 
     fn zpi_alu<Args>(
         idx: u8,
-        op: impl ALU<Args>,
+        op: impl Alu<Args>,
         cpu: &mut Self,
         bus: &mut Bus,
         ctrl: &mut Control,
@@ -553,7 +568,7 @@ impl CPU {
 
     fn zpi_rmw<Args>(
         idx: u8,
-        op: impl RMW<Args>,
+        op: impl Rmw<Args>,
         cpu: &mut Self,
         bus: &mut Bus,
         ctrl: &mut Control,
@@ -586,7 +601,7 @@ impl CPU {
 
     fn abi_alu<Args>(
         idx: u8,
-        op: impl ALU<Args>,
+        op: impl Alu<Args>,
         cpu: &mut Self,
         bus: &mut Bus,
         ctrl: &mut Control,
@@ -600,7 +615,7 @@ impl CPU {
                 cpu.read_pc(bus); // high byte of address
             }
             2 => {
-                cpu.vector = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                cpu.vector |= (bus.data as u16).wrapping_shl(8);
                 let addr = cpu.vector.wrapping_add(idx as u16);
                 if addr & 0xff00 == cpu.vector & 0xff00 {
                     bus.read(add_without_carry(cpu.vector, idx)); // operand
@@ -631,7 +646,7 @@ impl CPU {
                 cpu.read_pc(bus); // high byte of address
             }
             2 => {
-                cpu.vector = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                cpu.vector |= (bus.data as u16).wrapping_shl(8);
                 bus.read(add_without_carry(cpu.vector, idx)); // dummy read
             }
             3 => {
@@ -647,7 +662,7 @@ impl CPU {
 
     fn abi_rmw<Args>(
         idx: u8,
-        op: impl RMW<Args>,
+        op: impl Rmw<Args>,
         cpu: &mut Self,
         bus: &mut Bus,
         ctrl: &mut Control,
@@ -661,7 +676,7 @@ impl CPU {
                 cpu.read_pc(bus); // high byte of address
             }
             2 => {
-                cpu.vector = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                cpu.vector |= (bus.data as u16).wrapping_shl(8);
                 bus.read(add_without_carry(cpu.vector, idx)); // dummy read
             }
             3 => {
@@ -682,7 +697,7 @@ impl CPU {
         }
     }
 
-    fn izx_alu<Args>(op: impl ALU<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+    fn izx_alu<Args>(op: impl Alu<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // base zero-page pointer to address
@@ -737,7 +752,7 @@ impl CPU {
         }
     }
 
-    fn izx_rmw<Args>(op: impl RMW<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+    fn izx_rmw<Args>(op: impl Rmw<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // base zero-page pointer to address
@@ -771,7 +786,7 @@ impl CPU {
         }
     }
 
-    fn izy_alu<Args>(op: impl ALU<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+    fn izy_alu<Args>(op: impl Alu<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // zero-page pointer to base address
@@ -785,7 +800,7 @@ impl CPU {
                 cpu.vector = bus.data as u16;
             }
             3 => {
-                cpu.vector = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                cpu.vector |= (bus.data as u16).wrapping_shl(8);
                 let addr = cpu.vector.wrapping_add(cpu.y as u16);
                 if addr & 0xff00 == cpu.vector & 0xff00 {
                     bus.read(add_without_carry(cpu.vector, cpu.y)); // operand
@@ -820,7 +835,7 @@ impl CPU {
                 cpu.vector = bus.data as u16;
             }
             3 => {
-                cpu.vector = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                cpu.vector |= (bus.data as u16).wrapping_shl(8);
                 bus.read(add_without_carry(cpu.vector, cpu.y)); // dummy read
             }
             4 => {
@@ -834,7 +849,7 @@ impl CPU {
         }
     }
 
-    fn izy_rmw<Args>(op: impl RMW<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+    fn izy_rmw<Args>(op: impl Rmw<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
                 cpu.read_pc(bus); // zero-page pointer to base address
@@ -848,7 +863,7 @@ impl CPU {
                 cpu.vector = bus.data as u16;
             }
             3 => {
-                cpu.vector = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                cpu.vector |= (bus.data as u16).wrapping_shl(8);
                 bus.read(add_without_carry(cpu.vector, cpu.y)); // dummy read
             }
             4 => {
@@ -880,8 +895,8 @@ impl CPU {
     }
 
     fn xaa(data: u8, cpu: &mut Self, _: &mut Bus, ctrl: &mut Control) {
-        // TODO: 0xee if RDY
-        CPU::lda((cpu.a | 0xef) & cpu.x & data, cpu);
+        let magic = if ctrl.rdy { 0xee } else { 0xef };
+        CPU::lda((cpu.a | magic) & cpu.x & data, cpu);
     }
 
     fn ldx(data: u8, cpu: &mut Self) {
@@ -1078,7 +1093,7 @@ impl CPU {
         val
     }
 
-    fn isc(data: u8, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) -> u8 {
+    fn isc(data: u8, cpu: &mut Self, bus: &mut Bus, _: &mut Control) -> u8 {
         let val = CPU::inc(data, cpu);
         CPU::sbc(bus.addr as u8, cpu);
         val
@@ -1202,12 +1217,13 @@ impl CPU {
     }
 
     fn brk(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
+        let res = ctrl.res || (cpu.intg & !(cpu.nmi_pending || cpu.irq_pending));
         match cpu.op_cycle {
             0 => {
                 bus.read(cpu.pc); // dummy read
             }
             1 => {
-                if ctrl.res {
+                if res {
                     cpu.read_sp(bus); // dummy read
                     cpu.sp = cpu.sp.wrapping_sub(1);
                 } else {
@@ -1215,7 +1231,7 @@ impl CPU {
                 }
             }
             2 => {
-                if ctrl.res {
+                if res {
                     cpu.read_sp(bus); // dummy read
                     cpu.sp = cpu.sp.wrapping_sub(1);
                 } else {
@@ -1224,7 +1240,7 @@ impl CPU {
             }
             3 => {
                 // ??? is this here or at end of prev cycle?
-                if ctrl.res {
+                if res {
                     cpu.vector = 0xfffc;
                 } else if cpu.nmi_pending || ctrl.nmi {
                     cpu.vector = 0xfffa;
@@ -1232,7 +1248,7 @@ impl CPU {
                     cpu.vector = 0xfffe;
                 }
 
-                if ctrl.res {
+                if res {
                     cpu.read_sp(bus); // dummy read
                     cpu.sp = cpu.sp.wrapping_sub(1);
                 } else if cpu.intg {
@@ -1321,7 +1337,7 @@ impl CPU {
                 cpu.read_pc(bus); // high byte of pointer address
             }
             2 => {
-                cpu.vector = (bus.data as u16).wrapping_shl(8) | cpu.vector;
+                cpu.vector |= (bus.data as u16).wrapping_shl(8);
                 bus.read(cpu.vector); // low byte of target address
             }
             3 => {
@@ -1481,7 +1497,7 @@ impl CPU {
             }
             _ => {
                 debug_assert_eq!(4, cpu.op_cycle);
-                CPU::unstable_high_byte(|c| c.a & c.x, cpu.y, cpu, bus);
+                CPU::unstable_high_byte(|c| c.a & c.x, cpu.y, cpu, bus, ctrl);
                 cpu.poll_intg(ctrl);
             }
         }
@@ -1495,7 +1511,7 @@ impl CPU {
             _ => {
                 debug_assert_eq!(3, cpu.op_cycle);
                 cpu.sp = cpu.a & cpu.x;
-                CPU::unstable_high_byte(|c| c.sp, cpu.y, cpu, bus);
+                CPU::unstable_high_byte(|c| c.sp, cpu.y, cpu, bus, ctrl);
                 cpu.poll_intg(ctrl);
             }
         }
@@ -1508,7 +1524,7 @@ impl CPU {
             }
             _ => {
                 debug_assert_eq!(3, cpu.op_cycle);
-                CPU::unstable_high_byte(|c| c.y, cpu.x, cpu, bus);
+                CPU::unstable_high_byte(|c| c.y, cpu.x, cpu, bus, ctrl);
                 cpu.poll_intg(ctrl);
             }
         }
@@ -1521,7 +1537,7 @@ impl CPU {
             }
             _ => {
                 debug_assert_eq!(3, cpu.op_cycle);
-                CPU::unstable_high_byte(|c| c.x, cpu.y, cpu, bus);
+                CPU::unstable_high_byte(|c| c.x, cpu.y, cpu, bus, ctrl);
                 cpu.poll_intg(ctrl);
             }
         }
@@ -1534,20 +1550,21 @@ impl CPU {
             }
             _ => {
                 debug_assert_eq!(3, cpu.op_cycle);
-                CPU::unstable_high_byte(|c| c.a, cpu.y, cpu, bus);
+                CPU::unstable_high_byte(|c| c.a, cpu.y, cpu, bus, ctrl);
                 cpu.poll_intg(ctrl);
             }
         }
     }
 
-    fn unstable_high_byte<F>(data: F, idx: u8, cpu: &mut Self, bus: &mut Bus)
+    fn unstable_high_byte<F>(data: F, idx: u8, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control)
     where
         F: Fn(&mut Self) -> u8,
     {
-        // TODO: if rdy, don't & with hi+1?
-        let val = data(cpu) & ((cpu.vector >> 8) as u8).wrapping_add(1);
+        let hi1 = ((cpu.vector >> 8) as u8).wrapping_add(1);
+        let data = data(cpu);
+        let val = if ctrl.rdy { data } else { data & hi1 };
         if bus.addr != cpu.vector.wrapping_add(idx as u16) {
-            bus.write((val as u16).wrapping_shl(8) | bus.addr & 0xff, val);
+            bus.write(((data & hi1) as u16).wrapping_shl(8) | bus.addr & 0xff, val);
         } else {
             bus.write(bus.addr, val);
         }
