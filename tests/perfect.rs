@@ -3,6 +3,8 @@ use std::{
     fmt::Display,
 };
 
+use robo65xx::*;
+
 // http://www.visual6502.org/JSSim/expert.html?graphics=f&loglevel=2&steps=50&a=0010&d=58e60f38690260&a=fffe&d=2000&a=0020&d=e840&r=0010&irq0=20&irq1=26&logmore=irq,INTG,ir
 
 unsafe extern "C" {
@@ -116,7 +118,11 @@ impl P6502 {
         }
     }
 
-    fn activeStates(&self) -> [bool; 7] {
+    fn rdy(&self) -> bool {
+        unsafe { isNodeHigh(self.0, 89) == 0 }
+    }
+
+    fn active_states(&self) -> [bool; 7] {
         unsafe {
             [
                 isNodeHigh(self.0, 1536) == 0, // clock1
@@ -143,11 +149,12 @@ impl Display for P6502 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} {}{}{}  {} {:04x} {:02x} {} : {:04x} {:02x} {:02x} {:02x} {:02x} {:02x} {} {}",
+            "{} {}{}{}{} {} {:04x} {:02x} {} {:04x} {:02x} {:02x} {:02x} {:02x} {:02x} {} {}",
             if self.sync() { "S" } else { "s" },
             if self.res() { "R" } else { "r" },
             if self.nmi() { "N" } else { "n" },
             if self.irq() { "I" } else { "i" },
+            if self.rdy() { "*" } else { "," },
             if self.write() { "W" } else { "R" },
             self.addr(),
             self.data(),
@@ -161,13 +168,18 @@ impl Display for P6502 {
             Flags(self.flags()),
             ["T0", "T1", "T2", "T3", "T4", "T5", "T6"]
                 .iter()
-                .zip(self.activeStates())
+                .zip(self.active_states())
                 .filter(|&(_, active)| active)
                 .map(|(&s, _)| s)
                 .collect::<Vec<_>>()
                 .join("+")
         )
     }
+}
+
+struct TestCase {
+    data: Vec<(usize, Vec<u8>)>,
+    regs: Option<Regs>,
 }
 
 struct Harness {
@@ -180,19 +192,43 @@ struct Harness {
 }
 
 impl Harness {
-    fn init(memory: &[u8]) -> Self {
-        let mut cpu = CPU::new(None);
-        let mut bus = Bus::new(0, 0);
-        let mut ctrl = Control::new();
-        ctrl.res = false;
-        bus.addr = 0;
-        bus.data = memory[0];
-        let mut p6502 = P6502::new();
+    fn new(test_case: &TestCase) -> Self {
         let mut mem = [0u8; 65536];
         let mut pmem = [0u8; 65536];
-        mem[0..memory.len()].copy_from_slice(memory);
-        pmem[0..memory.len()].copy_from_slice(memory);
-        let mut h = Self {
+        for (offset, bytes) in &test_case.data {
+            mem[*offset..*offset + bytes.len()].copy_from_slice(&bytes);
+            pmem[*offset..*offset + bytes.len()].copy_from_slice(&bytes);
+        }
+
+        let bus = if let Some(regs) = test_case.regs {
+            pmem[0xfffc] = 0x00;
+            pmem[0xfffd] = 0xf0;
+            #[rustfmt::skip]
+            pmem[0xf000..0xf010].copy_from_slice(&[
+                /* LDY #y  */ 0xa0, regs.y,
+                /* LDX #sp */ 0xa2, regs.sp,
+                /* TXS     */ 0x9a,
+                /* LDX #x  */ 0xa2, regs.x,
+                /* LDA #p  */ 0xa9, regs.flags,
+                /* PHA     */ 0x48,
+                /* LDA #a  */ 0xa9, regs.a,
+                /* PLP     */ 0x28,
+                /* JMP #pc */ 0x4c, regs.pc as u8, (regs.pc >> 8) as u8
+            ]);
+
+            mem[0xfffc] = regs.pc as u8;
+            mem[0xfffd] = (regs.pc >> 8) as u8;
+
+            Bus::new(regs.pc, pmem[regs.pc as usize])
+        } else {
+            Bus::new(0, 0)
+        };
+
+        let cpu = CPU::new(&test_case.regs);
+        let ctrl = Control::new();
+        let p6502 = P6502::new();
+
+        let mut harness = Self {
             cpu,
             bus,
             ctrl,
@@ -200,13 +236,24 @@ impl Harness {
             mem,
             pmem,
         };
+
+        // Reset perfect6502.
         for _ in 0..9 {
-            h.p_tick();
+            harness.p_tick();
         }
-        for _ in 0..7 {
-            h.r_tick();
+        if test_case.regs.is_none() {
+            // Reset r6502.
+            for _ in 0..7 {
+                harness.r_tick();
+            }
+        } else {
+            // Setup initial registers for p6502.
+            for _ in 0..22 {
+                harness.p_tick();
+            }
         }
-        h
+
+        harness
     }
 
     fn r_tick(&mut self) {
@@ -224,13 +271,25 @@ impl Harness {
     }
 }
 
-use robo65xx::*;
-
 #[test]
 fn test_1() {
-    let mut memory = [0xa9, 0xff, 0xa9, 0xaa];
-    let mut h = Harness::init(&memory);
+    let test_case = TestCase {
+        data: vec![(0, vec![0xa9, 0xff, 0xa9, 0xaa])],
+        regs: Some(Regs {
+            a: 0x12,
+            x: 0x34,
+            y: 0x56,
+            sp: 0x78,
+            flags: 0b110,
+            pc: 0,
+        }),
+    };
+    let mut h = Harness::new(&test_case);
 
+    h.p_tick();
+    h.r_tick();
+    println!("R {} {} {}", &h.ctrl, &h.bus, &h.cpu);
+    println!("P {}", h.p6502);
     h.p_tick();
     h.r_tick();
     println!("R {} {} {}", &h.ctrl, &h.bus, &h.cpu);

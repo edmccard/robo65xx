@@ -1,7 +1,8 @@
-use std::{fmt::Display, ptr::fn_addr_eq};
+use std::fmt::Display;
 
 pub mod nmos;
 
+#[derive(Clone, Copy)]
 pub struct Bus {
     pub addr: u16,
     pub data: u8,
@@ -185,12 +186,27 @@ impl Display for Flags {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct Regs {
+    pub pc: u16,
     pub a: u8,
     pub x: u8,
     pub y: u8,
     pub sp: u8,
     pub flags: u8,
+}
+
+impl Default for Regs {
+    fn default() -> Self {
+        Self {
+            pc: 0,
+            a: 0,
+            x: 0xc0,
+            y: 0,
+            sp: 0x0,
+            flags: 0b110,
+        }
+    }
 }
 
 pub struct CPU {
@@ -225,14 +241,14 @@ impl Display for CPU {
         let intg = if self.intg { "!" } else { "." };
         write!(
             f,
-            "{} {} {:04x} {:02x} {:02x} {:02x} {:02x} {:02x} {}",
-            intg, self.op_cycle, self.pc, self.op, self.a, self.x, self.y, self.sp, self.flags
+            "{} {:04x} {:02x} {:02x} {:02x} {:02x} {:02x} {} {}",
+            intg, self.pc, self.op, self.a, self.x, self.y, self.sp, self.flags, self.op_cycle
         )
     }
 }
 
 impl CPU {
-    pub fn new(regs: Option<Regs>) -> Self {
+    pub fn new(regs: &Option<Regs>) -> Self {
         let mut cpu = Self {
             pc: 0,
             flags: Flags(0b110),
@@ -288,12 +304,6 @@ impl CPU {
         if ctrl.res || self.nmi_pending || (self.irq_pending && !self.flags.i()) {
             self.intg = true;
         }
-    }
-
-    // Read from and increment the program counter.
-    fn read_pc(&mut self, bus: &mut Bus) {
-        bus.read(self.pc);
-        self.pc = self.pc.wrapping_add(1);
     }
 
     // Read from the stack.
@@ -384,11 +394,12 @@ impl CPU {
     fn imm_alu<Args>(op: impl Alu<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // operand
+                bus.read(cpu.pc); // operand
                 cpu.poll_intg(ctrl);
             }
             _ => {
                 debug_assert_eq!(1, cpu.op_cycle);
+                cpu.pc = cpu.pc.wrapping_add(1);
                 op.run(bus.data, cpu, bus, ctrl);
                 cpu.fetch(bus, ctrl);
             }
@@ -398,9 +409,10 @@ impl CPU {
     fn zp_alu<Args>(op: impl Alu<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // zero-page address
+                bus.read(cpu.pc); // zero-page address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 bus.read(bus.data as u16); // operand
                 cpu.poll_intg(ctrl);
             }
@@ -415,9 +427,10 @@ impl CPU {
     fn zp_store(src: u8, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // zero-page address
+                bus.read(cpu.pc); // zero-page address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 bus.write(bus.data as u16, src);
                 cpu.poll_intg(ctrl);
             }
@@ -431,9 +444,10 @@ impl CPU {
     fn zp_rmw<Args>(op: impl Rmw<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // zero-page address
+                bus.read(cpu.pc); // zero-page address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 bus.read(bus.data as u16); // operand
             }
             2 => {
@@ -454,13 +468,15 @@ impl CPU {
     fn abs_alu<Args>(op: impl Alu<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // low byte of address
+                bus.read(cpu.pc); // low byte of address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = bus.data as u16;
-                cpu.read_pc(bus); // high byte of address
+                bus.read(cpu.pc); // high byte of address
             }
             2 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 bus.read((bus.data as u16).wrapping_shl(8) | cpu.vector); // operand
                 cpu.poll_intg(ctrl);
             }
@@ -475,13 +491,15 @@ impl CPU {
     fn abs_store(src: u8, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // low byte of address
+                bus.read(cpu.pc); // low byte of address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = bus.data as u16;
-                cpu.read_pc(bus); // high byte of address
+                bus.read(cpu.pc); // high byte of address
             }
             2 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 bus.write((bus.data as u16).wrapping_shl(8) | cpu.vector, src);
                 cpu.poll_intg(ctrl);
             }
@@ -495,13 +513,15 @@ impl CPU {
     fn abs_rmw<Args>(op: impl Rmw<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // low byte of address
+                bus.read(cpu.pc); // low byte of address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = bus.data as u16;
-                cpu.read_pc(bus); // high byte of address
+                bus.read(cpu.pc); // high byte of address
             }
             2 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 bus.read((bus.data as u16).wrapping_shl(8) | cpu.vector); // operand
             }
             3 => {
@@ -528,9 +548,10 @@ impl CPU {
     ) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // base zero-page address
+                bus.read(cpu.pc); // base zero-page address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = add_without_carry(bus.data as u16, idx);
                 bus.read(bus.data as u16); // dummy read
             }
@@ -549,9 +570,10 @@ impl CPU {
     fn zpi_store(idx: u8, src: u8, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // base zero-page address
+                bus.read(cpu.pc); // base zero-page address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = add_without_carry(bus.data as u16, idx);
                 bus.read(bus.data as u16); // dummy read
             }
@@ -575,9 +597,10 @@ impl CPU {
     ) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // base zero-page address
+                bus.read(cpu.pc); // base zero-page address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = add_without_carry(bus.data as u16, idx);
                 bus.read(bus.data as u16); // dummy read
             }
@@ -608,13 +631,15 @@ impl CPU {
     ) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // low byte of address
+                bus.read(cpu.pc); // low byte of address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = bus.data as u16;
-                cpu.read_pc(bus); // high byte of address
+                bus.read(cpu.pc); // high byte of address
             }
             2 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector |= (bus.data as u16).wrapping_shl(8);
                 let addr = cpu.vector.wrapping_add(idx as u16);
                 if addr & 0xff00 == cpu.vector & 0xff00 {
@@ -639,13 +664,15 @@ impl CPU {
     fn abi_store(idx: u8, src: u8, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // low byte of address
+                bus.read(cpu.pc); // low byte of address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = bus.data as u16;
-                cpu.read_pc(bus); // high byte of address
+                bus.read(cpu.pc); // high byte of address
             }
             2 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector |= (bus.data as u16).wrapping_shl(8);
                 bus.read(add_without_carry(cpu.vector, idx)); // dummy read
             }
@@ -669,13 +696,15 @@ impl CPU {
     ) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // low byte of address
+                bus.read(cpu.pc); // low byte of address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = bus.data as u16;
-                cpu.read_pc(bus); // high byte of address
+                bus.read(cpu.pc); // high byte of address
             }
             2 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector |= (bus.data as u16).wrapping_shl(8);
                 bus.read(add_without_carry(cpu.vector, idx)); // dummy read
             }
@@ -700,9 +729,10 @@ impl CPU {
     fn izx_alu<Args>(op: impl Alu<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // base zero-page pointer to address
+                bus.read(cpu.pc); // base zero-page pointer to address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = add_without_carry(bus.data as u16, cpu.x);
                 bus.read(bus.data as u16); // dummy read
             }
@@ -728,9 +758,10 @@ impl CPU {
     fn izx_store(src: u8, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // base zero-page pointer to address
+                bus.read(cpu.pc); // base zero-page pointer to address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = add_without_carry(bus.data as u16, cpu.x);
                 bus.read(bus.data as u16); // dummy read
             }
@@ -755,9 +786,10 @@ impl CPU {
     fn izx_rmw<Args>(op: impl Rmw<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // base zero-page pointer to address
+                bus.read(cpu.pc); // base zero-page pointer to address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = add_without_carry(bus.data as u16, cpu.x);
                 bus.read(bus.data as u16); // dummy read
             }
@@ -789,9 +821,10 @@ impl CPU {
     fn izy_alu<Args>(op: impl Alu<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // zero-page pointer to base address
+                bus.read(cpu.pc); // zero-page pointer to base address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = bus.data as u16;
                 bus.read(cpu.vector); // low byte of base address
             }
@@ -824,9 +857,10 @@ impl CPU {
     fn izy_store(src: u8, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // zero-page pointer to base address
+                bus.read(cpu.pc); // zero-page pointer to base address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = bus.data as u16;
                 bus.read(cpu.vector); // low byte of base address
             }
@@ -852,9 +886,10 @@ impl CPU {
     fn izy_rmw<Args>(op: impl Rmw<Args>, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // zero-page pointer to base address
+                bus.read(cpu.pc); // zero-page pointer to base address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = bus.data as u16;
                 bus.read(cpu.vector); // low byte of base address
             }
@@ -1169,10 +1204,11 @@ impl CPU {
     fn branch(take: bool, cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // offset
+                bus.read(cpu.pc); // offset
                 cpu.poll_intg(ctrl);
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = cpu.pc.wrapping_add((bus.data as i8) as u16);
                 bus.read(cpu.pc); // dummy read
                 if !take {
@@ -1312,11 +1348,12 @@ impl CPU {
     fn jmp(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // low byte of target address
+                bus.read(cpu.pc); // low byte of target address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = bus.data as u16;
-                cpu.read_pc(bus); // high byte of target address
+                bus.read(cpu.pc); // high byte of target address
                 cpu.poll_intg(ctrl);
             }
             _ => {
@@ -1330,13 +1367,15 @@ impl CPU {
     fn jmp_ind(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // low byte of pointer address
+                bus.read(cpu.pc); // low byte of pointer address
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = bus.data as u16;
-                cpu.read_pc(bus); // high byte of pointer address
+                bus.read(cpu.pc); // high byte of pointer address
             }
             2 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector |= (bus.data as u16).wrapping_shl(8);
                 bus.read(cpu.vector); // low byte of target address
             }
@@ -1356,9 +1395,10 @@ impl CPU {
     fn jsr(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
             0 => {
-                cpu.read_pc(bus); // low byte of target
+                bus.read(cpu.pc); // low byte of target
             }
             1 => {
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.vector = bus.data as u16;
                 cpu.read_sp(bus); // dummy read
             }
@@ -1399,11 +1439,12 @@ impl CPU {
             }
             4 => {
                 cpu.pc = (bus.data as u16).wrapping_shl(8) | cpu.vector;
-                cpu.read_pc(bus); // dummy read
+                bus.read(cpu.pc); // dummy read
                 cpu.poll_intg(ctrl);
             }
             _ => {
                 debug_assert_eq!(5, cpu.op_cycle);
+                cpu.pc = cpu.pc.wrapping_add(1);
                 cpu.fetch(bus, ctrl);
             }
         }
