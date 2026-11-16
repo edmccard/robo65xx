@@ -269,37 +269,90 @@ impl Harness {
         self.p6502.step(&mut self.pmem);
         self.p6502.step(&mut self.pmem);
     }
+
+    fn run(&mut self) {
+        let mut p_log = Vec::<String>::new();
+        let mut log = Vec::<String>::new();
+        loop {
+            self.p_tick();
+            p_log.push(format!("{}", self.p6502)[0..47].into());
+            if p_log.len() > 99 {
+                assert!(false, "perfect6502 ran too long");
+            }
+            if self.p6502.op() == 0x00 {
+                break;
+            }
+        }
+        loop {
+            self.r_tick();
+            log.push(format!("{} {} {}", self.ctrl, self.bus, self.cpu)[0..47].into());
+            if self.cpu.op() == 0x00 || log.len() > p_log.len() {
+                break;
+            }
+        }
+        if p_log.len() > log.len() {
+            // interrupt too soon, or single op wrong cycle count
+            assert!(false, "Too few cycles");
+        } else if p_log.len() < log.len() {
+            // interrupt too late, or single op wrong cycle count
+            assert!(false, "Too many cycles");
+        }
+        if log != p_log {
+            let mut msg = String::new();
+            for i in 0..p_log.len() {
+                msg.push_str(&format!("{:2} {}\n   ", i, p_log[i]));
+                msg.push_str(
+                    &p_log[i]
+                        .chars()
+                        .zip(log[i].chars())
+                        .map(|(c1, c2)| if c1 == c2 { ' ' } else { c2 })
+                        .collect::<String>(),
+                );
+                msg.push('\n');
+            }
+            assert!(false, "{}", msg);
+        }
+    }
 }
 
 #[test]
-fn test_1() {
+fn test_reset() {
     let test_case = TestCase {
-        data: vec![(0, vec![0xa9, 0xff, 0xa9, 0xaa])],
-        regs: Some(Regs {
-            a: 0x12,
-            x: 0x34,
-            y: 0x56,
-            sp: 0x78,
-            flags: 0b110,
-            pc: 0,
-        }),
+        data: vec![(0x200, vec![0xa9]), (0xfffc, vec![0x00, 0x02])],
+        regs: None,
+    };
+    let h = Harness::new(&test_case);
+    assert_eq!(
+        format!("{}", h.p6502)[0..47],
+        format!("{} {} {}", &h.ctrl, &h.bus, &h.cpu)[0..47]
+    );
+}
+
+#[test]
+fn test_foo() {
+    let test_case = TestCase {
+        data: vec![(0x200, vec![0xa9]), (0xfffc, vec![0x00, 0x02])],
+        regs: None,
     };
     let mut h = Harness::new(&test_case);
+    h.run();
+}
 
-    h.p_tick();
-    h.r_tick();
-    println!("R {} {} {}", &h.ctrl, &h.bus, &h.cpu);
-    println!("P {}", h.p6502);
-    h.p_tick();
-    h.r_tick();
-    println!("R {} {} {}", &h.ctrl, &h.bus, &h.cpu);
-    println!("P {}", h.p6502);
-    h.p_tick();
-    h.r_tick();
-    println!("R {} {} {}", &h.ctrl, &h.bus, &h.cpu);
-    println!("P {}", h.p6502);
-    h.p_tick();
-    h.r_tick();
-    println!("R {} {} {}", &h.ctrl, &h.bus, &h.cpu);
-    println!("P {}", h.p6502);
+// test implicit
+#[test]
+fn test_flags() {
+    for opcode in [0x18u8, 0x38, 0xd8, 0xf8, 0x58, 0x78] {
+        for flags in [0b00000000u8, 0b11111111] {
+            let tc = TestCase {
+                data: vec![(0x200, vec![opcode])],
+                regs: Some(Regs {
+                    pc: 0x200,
+                    flags: flags,
+                    ..Default::default()
+                }),
+            };
+            let mut h = Harness::new(&tc);
+            h.run();
+        }
+    }
 }

@@ -85,7 +85,7 @@ impl Display for Control {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub struct Flags(pub u8);
 
 impl Flags {
@@ -159,7 +159,7 @@ impl Flags {
     }
 
     fn set_nz(&mut self, val: u8) {
-        self.0 &= val & 0b01111101;
+        self.0 &= self.0 & 0b01111101;
         self.0 |= val & 0b10000000;
         if val == 0 {
             self.0 |= 0b00000010;
@@ -269,10 +269,39 @@ impl CPU {
             cpu.y = regs.y;
             cpu.sp = regs.sp;
             cpu.flags.set_from(regs.flags, 0b11111111);
+            cpu.pc = regs.pc;
         } else {
             cpu.intg = true;
         }
         cpu
+    }
+
+    pub fn a(&self) -> u8 {
+        self.a
+    }
+
+    pub fn x(&self) -> u8 {
+        self.x
+    }
+
+    pub fn y(&self) -> u8 {
+        self.y
+    }
+
+    pub fn sp(&self) -> u8 {
+        self.sp
+    }
+
+    pub fn flags(&self) -> Flags {
+        self.flags
+    }
+
+    pub fn pc(&self) -> u16 {
+        self.pc
+    }
+
+    pub fn op(&self) -> u8 {
+        self.op
     }
 
     pub fn tick<F>(&mut self, bus: &mut Bus, ctrl: &mut Control, exec: F)
