@@ -354,7 +354,7 @@ impl CPU {
 }
 
 fn add_without_carry(a: u16, b: u8) -> u16 {
-    a.wrapping_add(b as u16) & 0xff00
+    a & 0xff00 | (a.wrapping_add(b as u16) & 0xff)
 }
 
 trait Alu<Args> {

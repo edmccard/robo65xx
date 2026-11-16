@@ -328,20 +328,10 @@ fn test_reset() {
     );
 }
 
-#[test]
-fn test_foo() {
-    let test_case = TestCase {
-        data: vec![(0x200, vec![0xa9]), (0xfffc, vec![0x00, 0x02])],
-        regs: None,
-    };
-    let mut h = Harness::new(&test_case);
-    h.run();
-}
-
 // test implicit
 #[test]
 fn test_flags() {
-    for opcode in [0x18u8, 0x38, 0xd8, 0xf8, 0x58, 0x78] {
+    for opcode in [0x18, 0x38, 0xd8, 0xf8, 0x58, 0x78] {
         for flags in [0b00000000u8, 0b11111111] {
             let tc = TestCase {
                 data: vec![(0x200, vec![opcode])],
@@ -349,6 +339,97 @@ fn test_flags() {
                     pc: 0x200,
                     flags: flags,
                     ..Default::default()
+                }),
+            };
+            let mut h = Harness::new(&tc);
+            h.run();
+        }
+    }
+}
+
+#[test]
+fn test_nop() {
+    for opcode in [0x1a, 0x3a, 0x5a, 0x7a, 0xda, 0xea, 0xfa] {
+        for flags in [0b00000000u8, 0b11111111] {
+            let tc = TestCase {
+                data: vec![(0x200, vec![opcode])],
+                regs: Some(Regs {
+                    pc: 0x200,
+                    flags: flags,
+                    ..Default::default()
+                }),
+            };
+            let mut h = Harness::new(&tc);
+            h.run();
+        }
+    }
+}
+
+#[test]
+fn test_nop_abs() {
+    for flags in [0b00000000u8, 0b11111111] {
+        let tc = TestCase {
+            data: vec![(0x200, vec![0x0c, 0x33, 0x44]), (0x4433, vec![0xab])],
+            regs: Some(Regs {
+                pc: 0x200,
+                flags: flags,
+                a: 0x12,
+                x: 0x34,
+                y: 0x45,
+                sp: 0x56,
+            }),
+        };
+        let mut h = Harness::new(&tc);
+        h.run();
+    }
+}
+
+#[test]
+fn test_nop_abi() {
+    for opcode in [0x1c, 0x3c, 0x5c, 0x7c, 0xdc, 0xfc] {
+        for x in [0x34, 0xcd] {
+            for flags in [0b00000000, 0b11111111] {
+                let tc = TestCase {
+                    data: vec![
+                        (0x200, vec![opcode, 0x33, 0x44]),
+                        (0x4467, vec![0xab]),
+                        (0x4500, vec![0xde]),
+                    ],
+                    regs: Some(Regs {
+                        pc: 0x200,
+                        flags: flags,
+                        a: 0x12,
+                        x: x,
+                        y: 0x45,
+                        sp: 0x56,
+                    }),
+                };
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+        }
+    }
+}
+
+#[test]
+fn test_nop_imm_zp() {
+    for opcode in [
+        0x80, 0x82, 0xc2, 0xe2, 0x89, 0x04, 0x44, 0x64, 0x14, 0x34, 0x54, 0x74, 0xd4, 0xf4,
+    ] {
+        for flags in [0b00000000u8, 0b11111111] {
+            let tc = TestCase {
+                data: vec![
+                    (0x200, vec![opcode, 0x78]),
+                    (0x78, vec![0x9a]),
+                    (0xac, vec![0xbd]),
+                ],
+                regs: Some(Regs {
+                    pc: 0x200,
+                    flags: flags,
+                    a: 0x12,
+                    x: 0x34,
+                    y: 0x45,
+                    sp: 0x56,
                 }),
             };
             let mut h = Harness::new(&tc);
