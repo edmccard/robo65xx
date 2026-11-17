@@ -340,10 +340,9 @@ impl CPU {
         bus.read(self.sp as u16 | 0x100);
     }
 
-    // Write to the stack and decrement the stack pointer.
+    // Write to the stack.
     fn write_sp(&mut self, bus: &mut Bus, data: u8) {
         bus.write(self.sp as u16 | 0x100, data);
-        self.sp = self.sp.wrapping_sub(1);
     }
 
     // Set up opcode fetch
@@ -1290,20 +1289,20 @@ impl CPU {
             1 => {
                 if res {
                     cpu.read_sp(bus); // dummy read
-                    cpu.sp = cpu.sp.wrapping_sub(1);
                 } else {
                     cpu.write_sp(bus, (cpu.pc >> 8) as u8);
                 }
             }
             2 => {
+                cpu.sp = cpu.sp.wrapping_sub(1);
                 if res {
                     cpu.read_sp(bus); // dummy read
-                    cpu.sp = cpu.sp.wrapping_sub(1);
                 } else {
                     cpu.write_sp(bus, cpu.pc as u8);
                 }
             }
             3 => {
+                cpu.sp = cpu.sp.wrapping_sub(1);
                 // ??? is this here or at end of prev cycle?
                 if res {
                     cpu.vector = 0xfffc;
@@ -1315,7 +1314,6 @@ impl CPU {
 
                 if res {
                     cpu.read_sp(bus); // dummy read
-                    cpu.sp = cpu.sp.wrapping_sub(1);
                 } else if cpu.intg {
                     cpu.write_sp(bus, cpu.flags.0 & 0b1110_1111);
                 } else {
@@ -1323,6 +1321,7 @@ impl CPU {
                 }
             }
             4 => {
+                cpu.sp = cpu.sp.wrapping_sub(1);
                 bus.read(cpu.vector); // low byte of target
 
                 // ??? is this here or at start of next cycle?
@@ -1350,19 +1349,19 @@ impl CPU {
             }
             1 => {
                 cpu.read_sp(bus); // dummy read
-                cpu.sp = cpu.sp.wrapping_add(1);
             }
             2 => {
-                cpu.read_sp(bus);
                 cpu.sp = cpu.sp.wrapping_add(1);
+                cpu.read_sp(bus);
             }
             3 => {
                 cpu.flags.set_from(bus.data, 0b11111111);
-                cpu.read_sp(bus); // low byte of return address
                 cpu.sp = cpu.sp.wrapping_add(1);
+                cpu.read_sp(bus); // low byte of return address
             }
             4 => {
                 cpu.vector = bus.data as u16;
+                cpu.sp = cpu.sp.wrapping_add(1);
                 cpu.read_sp(bus); // high byte of return address
                 cpu.poll_intg(ctrl);
             }
@@ -1435,9 +1434,11 @@ impl CPU {
                 cpu.write_sp(bus, (cpu.pc >> 8) as u8);
             }
             3 => {
+                cpu.sp = cpu.sp.wrapping_sub(1);
                 cpu.write_sp(bus, cpu.pc as u8);
             }
             4 => {
+                cpu.sp = cpu.sp.wrapping_sub(1);
                 bus.read(cpu.pc); // high byte of target
                 cpu.poll_intg(ctrl);
             }
@@ -1456,14 +1457,14 @@ impl CPU {
             }
             1 => {
                 cpu.read_sp(bus); // dummy read
-                cpu.sp = cpu.sp.wrapping_add(1);
             }
             2 => {
-                cpu.read_sp(bus); // low byte of return address
                 cpu.sp = cpu.sp.wrapping_add(1);
+                cpu.read_sp(bus); // low byte of return address
             }
             3 => {
                 cpu.vector = bus.data as u16;
+                cpu.sp = cpu.sp.wrapping_add(1);
                 cpu.read_sp(bus); // high byte of return address
             }
             4 => {
@@ -1493,6 +1494,7 @@ impl CPU {
             }
             _ => {
                 debug_assert_eq!(2, cpu.op_cycle);
+                cpu.sp = cpu.sp.wrapping_sub(1);
                 cpu.fetch(bus, ctrl);
             }
         }
@@ -1505,9 +1507,9 @@ impl CPU {
             }
             1 => {
                 cpu.read_sp(bus); // dummy read
-                cpu.sp = cpu.sp.wrapping_add(1);
             }
             2 => {
+                cpu.sp = cpu.sp.wrapping_add(1);
                 cpu.read_sp(bus); // data
                 cpu.poll_intg(ctrl);
             }
@@ -1531,6 +1533,7 @@ impl CPU {
             }
             _ => {
                 debug_assert_eq!(2, cpu.op_cycle);
+                cpu.sp = cpu.sp.wrapping_sub(1);
                 cpu.fetch(bus, ctrl);
             }
         }
@@ -1543,9 +1546,9 @@ impl CPU {
             }
             1 => {
                 cpu.read_sp(bus); // dummy read
-                cpu.sp = cpu.sp.wrapping_add(1);
             }
             2 => {
+                cpu.sp = cpu.sp.wrapping_add(1);
                 cpu.read_sp(bus); // data
                 cpu.poll_intg(ctrl);
             }
@@ -1575,14 +1578,18 @@ impl CPU {
 
     fn tas(cpu: &mut Self, bus: &mut Bus, ctrl: &mut Control) {
         match cpu.op_cycle {
-            0 | 1 | 2 | 4 => {
+            0 | 1 | 2 => {
                 CPU::abi_store(cpu.y, 0, cpu, bus, ctrl);
             }
-            _ => {
-                debug_assert_eq!(3, cpu.op_cycle);
-                cpu.sp = cpu.a & cpu.x;
-                CPU::unstable_high_byte(|c| c.sp, cpu.y, cpu, bus, ctrl);
+            3 => {
+                let sp = cpu.a & cpu.x;
+                CPU::unstable_high_byte(|_| sp, cpu.y, cpu, bus, ctrl);
                 cpu.poll_intg(ctrl);
+            }
+            _ => {
+                debug_assert_eq!(4, cpu.op_cycle);
+                cpu.sp = cpu.a & cpu.x;
+                cpu.fetch(bus, ctrl);
             }
         }
     }

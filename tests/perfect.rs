@@ -251,6 +251,10 @@ impl Harness {
             for _ in 0..22 {
                 harness.p_tick();
             }
+            harness.pmem[0x100..0x200].copy_from_slice(&mem[0x100..0x200]);
+            harness.pmem[0xf000..0xf010].copy_from_slice(&mem[0xf000..0xf010]);
+            harness.pmem[0xfffc] = mem[0xfffc];
+            harness.pmem[0xfffd] = mem[0xfffd];
         }
 
         harness
@@ -297,21 +301,55 @@ impl Harness {
             // interrupt too late, or single op wrong cycle count
             assert!(false, "Too many cycles");
         }
-        if log != p_log {
+        if !Harness::check_bus(&p_log, &log) {
             let mut msg = String::new();
             for i in 0..p_log.len() {
-                msg.push_str(&format!("{:2} {}\n   ", i, p_log[i]));
-                msg.push_str(
-                    &p_log[i]
-                        .chars()
-                        .zip(log[i].chars())
-                        .map(|(c1, c2)| if c1 == c2 { ' ' } else { c2 })
-                        .collect::<String>(),
-                );
-                msg.push('\n');
+                msg.push_str(&format!("{:2} {}\n   ", i, &p_log[i][0..26]));
+                msg.push_str(&Harness::log_diff(&p_log[i][0..26], &log[i][0..26]))
             }
             assert!(false, "{}", msg);
         }
+        let p_regs = &p_log.last().unwrap()[24..47];
+        let regs = &log.last().unwrap()[24..47];
+        if p_regs != regs {
+            let i = log.len() - 1;
+            let op = &p_log[log.len() - 2][24..26];
+            let mut msg = format!("{:2} {} {}\n   ", i, op, &p_regs[3..]);
+            msg.push_str(&Harness::log_diff(p_regs, regs));
+            assert!(false, "{}", msg);
+        }
+    }
+
+    fn log_diff(p: &str, r: &str) -> String {
+        let mut diff = String::new();
+        diff.push_str(
+            &p.chars()
+                .zip(r.chars())
+                .map(|(c1, c2)| if c1 == c2 { ' ' } else { c2 })
+                .collect::<String>(),
+        );
+        diff.push('\n');
+        diff
+    }
+
+    fn check_bus(p_log: &[String], log: &[String]) -> bool {
+        for i in 0..p_log.len() {
+            if p_log[i][0..26] != log[i][0..26] {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+fn test_regs() -> Regs {
+    Regs {
+        pc: 0x200,
+        a: 0x12,
+        x: 0x34,
+        y: 0x45,
+        sp: 0x56,
+        flags: 0b110,
     }
 }
 
@@ -328,17 +366,16 @@ fn test_reset() {
     );
 }
 
-// test implicit
 #[test]
-fn test_flags() {
-    for opcode in [0x18, 0x38, 0xd8, 0xf8, 0x58, 0x78] {
-        for flags in [0b00000000u8, 0b11111111] {
+fn test_flags_push() {
+    //             PHP   CLC   SEC   PHA   CLI   SEI   CLV   CLD   SED
+    for opcode in [0x08, 0x18, 0x38, 0x48, 0x58, 0x78, 0xb8, 0xd8, 0xf8] {
+        for flags in [0b00000000, 0b11111111, 0b01010101, 0b10101010] {
             let tc = TestCase {
                 data: vec![(0x200, vec![opcode])],
                 regs: Some(Regs {
-                    pc: 0x200,
                     flags: flags,
-                    ..Default::default()
+                    ..test_regs()
                 }),
             };
             let mut h = Harness::new(&tc);
@@ -348,60 +385,16 @@ fn test_flags() {
 }
 
 #[test]
-fn test_nop() {
-    for opcode in [0x1a, 0x3a, 0x5a, 0x7a, 0xda, 0xea, 0xfa] {
-        for flags in [0b00000000u8, 0b11111111] {
-            let tc = TestCase {
-                data: vec![(0x200, vec![opcode])],
-                regs: Some(Regs {
-                    pc: 0x200,
-                    flags: flags,
-                    ..Default::default()
-                }),
-            };
-            let mut h = Harness::new(&tc);
-            h.run();
-        }
-    }
-}
-
-#[test]
-fn test_nop_abs() {
-    for flags in [0b00000000u8, 0b11111111] {
-        let tc = TestCase {
-            data: vec![(0x200, vec![0x0c, 0x33, 0x44]), (0x4433, vec![0xab])],
-            regs: Some(Regs {
-                pc: 0x200,
-                flags: flags,
-                a: 0x12,
-                x: 0x34,
-                y: 0x45,
-                sp: 0x56,
-            }),
-        };
-        let mut h = Harness::new(&tc);
-        h.run();
-    }
-}
-
-#[test]
-fn test_nop_abi() {
-    for opcode in [0x1c, 0x3c, 0x5c, 0x7c, 0xdc, 0xfc] {
-        for x in [0x34, 0xcd] {
-            for flags in [0b00000000, 0b11111111] {
+fn test_pull() {
+    //             PLP   PLA
+    for opcode in [0x28, 0x68] {
+        for flags in [0b00000000, 0b11111111] {
+            for val in [0b00000000, 0b01010101, 0b10101010] {
                 let tc = TestCase {
-                    data: vec![
-                        (0x200, vec![opcode, 0x33, 0x44]),
-                        (0x4467, vec![0xab]),
-                        (0x4500, vec![0xde]),
-                    ],
+                    data: vec![(0x200, vec![opcode]), (0x156, vec![val])],
                     regs: Some(Regs {
-                        pc: 0x200,
                         flags: flags,
-                        a: 0x12,
-                        x: x,
-                        y: 0x45,
-                        sp: 0x56,
+                        ..test_regs()
                     }),
                 };
                 let mut h = Harness::new(&tc);
@@ -412,24 +405,149 @@ fn test_nop_abi() {
 }
 
 #[test]
-fn test_nop_imm_zp() {
+fn test_implicit_no_arith() {
+    //             NOP   NOP   NOP   NOP   TXS   NOP   NOP   NOP
+    for opcode in [0x1a, 0x3a, 0x5a, 0x7a, 0x9a, 0xda, 0xea, 0xfa] {
+        for flags in [0b00000000, 0b11111111] {
+            let tc = TestCase {
+                data: vec![(0x200, vec![opcode])],
+                regs: Some(Regs {
+                    flags: flags,
+                    ..test_regs()
+                }),
+            };
+            let mut h = Harness::new(&tc);
+            h.run();
+        }
+    }
+}
+
+#[test]
+fn test_implicit_nz() {
+    // DEX / DEY
+    for val in [0x00, 0x01, 0x80] {
+        for flags in [0b00000000, 0b11111111] {
+            let tc = TestCase {
+                data: vec![(0x200, vec![0xca])],
+                regs: Some(Regs {
+                    flags: flags,
+                    x: val,
+                    ..test_regs()
+                }),
+            };
+            let mut h = Harness::new(&tc);
+            h.run();
+        }
+    }
+}
+
+#[test]
+fn test_abs_no_arith() {
+    //             NOP   STY   STA   STX   SAX
+    for opcode in [0x0c, 0x8c, 0x8d, 0x8e, 0x8f] {
+        for flags in [0b00000000, 0b11111111] {
+            let tc = TestCase {
+                data: vec![(0x200, vec![opcode, 0x33, 0x44]), (0x4433, vec![0xab])],
+                regs: Some(Regs {
+                    flags: flags,
+                    ..test_regs()
+                }),
+            };
+            let mut h = Harness::new(&tc);
+            h.run();
+        }
+    }
+}
+
+#[test]
+fn test_abx_no_arith() {
+    //             NOP   NOP   NOP   NOP   SHY   STA   NOP   NOP
+    for opcode in [0x1c, 0x3c, 0x5c, 0x7c, 0x9c, 0x9d, 0xdc, 0xfc] {
+        for x in [0x34, 0xcd] {
+            for flags in [0b00000000, 0b11111111] {
+                let tc = TestCase {
+                    data: vec![
+                        (0x200, vec![opcode, 0x33, 0x44]),
+                        (0x4467, vec![0xab]),
+                        (0x4500, vec![0xde]),
+                    ],
+                    regs: Some(Regs {
+                        flags: flags,
+                        x: x,
+                        ..test_regs()
+                    }),
+                };
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+        }
+    }
+}
+
+#[test]
+fn test_aby_no_arith() {
+    //             TAS   SHX   AHX     LAS
+    for opcode in [0x9b, 0x9e, 0x9f /* 0xbb */] {
+        for y in [0x45, 0xcd] {
+            for flags in [0b00000000, 0b11111111] {
+                let tc = TestCase {
+                    data: vec![
+                        (0x200, vec![opcode, 0x33, 0x44]),
+                        (0x4478, vec![0xab]),
+                        (0x4500, vec![0xde]),
+                    ],
+                    regs: Some(Regs {
+                        flags: flags,
+                        y: y,
+                        ..test_regs()
+                    }),
+                };
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+        }
+    }
+}
+
+#[test]
+fn test_imm_zp_no_arith() {
+    //  NOP   NOP   NOP   NOP   NOP   STY   STA   STX   SAX   NOP   NOP   NOP
     for opcode in [
-        0x80, 0x82, 0xc2, 0xe2, 0x89, 0x04, 0x44, 0x64, 0x14, 0x34, 0x54, 0x74, 0xd4, 0xf4,
+        0x04, 0x44, 0x64, 0x80, 0x82, 0x84, 0x85, 0x86, 0x87, 0x89, 0xc2, 0xe2,
     ] {
-        for flags in [0b00000000u8, 0b11111111] {
+        for flags in [0b00000000, 0b11111111] {
             let tc = TestCase {
                 data: vec![
                     (0x200, vec![opcode, 0x78]),
                     (0x78, vec![0x9a]),
-                    (0xac, vec![0xbd]),
+                    (0xac, vec![0xdb]),
                 ],
                 regs: Some(Regs {
-                    pc: 0x200,
                     flags: flags,
-                    a: 0x12,
-                    x: 0x34,
-                    y: 0x45,
-                    sp: 0x56,
+                    ..test_regs()
+                }),
+            };
+            let mut h = Harness::new(&tc);
+            h.run();
+        }
+    }
+}
+
+#[test]
+fn test_zpi_no_arith() {
+    //             NOP   NOP   NOP   NOP   STY   STA   STX   SAX   NOP   NOP
+    for opcode in [0x14, 0x34, 0x54, 0x74, 0x94, 0x95, 0x96, 0x97, 0xd4, 0xf4] {
+        for flags in [0b00000000, 0b11111111] {
+            let tc = TestCase {
+                data: vec![
+                    (0x200, vec![opcode, 0x78]),
+                    (0x78, vec![0x9a]),
+                    (0xac, vec![0xdb]),
+                    (0xbd, vec![0xcf]),
+                ],
+                regs: Some(Regs {
+                    flags: flags,
+                    ..test_regs()
                 }),
             };
             let mut h = Harness::new(&tc);
