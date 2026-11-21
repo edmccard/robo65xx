@@ -177,9 +177,133 @@ impl Display for P6502 {
     }
 }
 
+enum Reg {
+    A,
+    X,
+    Y,
+    SP,
+}
+
 struct TestCase {
     data: Vec<(usize, Vec<u8>)>,
     regs: Option<Regs>,
+}
+
+impl TestCase {
+    fn one_byte_no_deps(opcode: u8, flags: u8) -> TestCase {
+        let data = vec![(0x200, vec![opcode])];
+        TestCase {
+            data,
+            regs: Some(Regs {
+                flags,
+                ..test_regs()
+            }),
+        }
+    }
+
+    fn one_byte_reg(opcode: u8, reg: Reg, val: u8, flags: u8) -> TestCase {
+        let data = vec![(0x200, vec![opcode])];
+        let regs = match reg {
+            Reg::A => Regs {
+                flags,
+                a: val,
+                ..test_regs()
+            },
+            Reg::X => Regs {
+                flags,
+                x: val,
+                ..test_regs()
+            },
+            Reg::Y => Regs {
+                flags,
+                y: val,
+                ..test_regs()
+            },
+            Reg::SP => Regs {
+                flags,
+                sp: val,
+                ..test_regs()
+            },
+        };
+        TestCase {
+            data,
+            regs: Some(regs),
+        }
+    }
+
+    fn two_byte_vals(opcode: u8, regs: Regs, vals: [u8; 6]) -> TestCase {
+        assert!(regs.x.abs_diff(regs.y) > 2 && regs.x > 1 && regs.y > 1);
+        let data = vec![
+            // immediate value / zp addr / zpi base
+            (regs.pc as usize, vec![opcode, vals[0]]),
+            // zp value / izy base
+            (vals[0] as usize, vec![vals[1], 0x50]), // if izy, call with y < 0x87 and y >= 0x87
+            // zpx value / izx addr lo
+            (vals[0].wrapping_add(regs.x) as usize, vec![vals[2]]),
+            // izx addr hi
+            (
+                vals[0].wrapping_add(regs.x).wrapping_add(1) as usize,
+                vec![0x60],
+            ),
+            // zpy value
+            (vals[0].wrapping_add(regs.y) as usize, vec![vals[3]]),
+            // izx value
+            (0x6080, vec![vals[4]]),
+            // izy value
+            (
+                0x5079u16.wrapping_add(regs.y as u16) as usize,
+                vec![vals[5]],
+            ),
+        ];
+        TestCase {
+            data,
+            regs: Some(regs),
+        }
+    }
+
+    fn two_byte_no_deps(opcode: u8, regs: Regs) -> TestCase {
+        let vals = [0x78, 0x79, 0x80, 0x81, 0x82, 0x83];
+        for byte in vals {
+            assert!(regs.a != byte && regs.x != byte && regs.y != byte);
+        }
+        TestCase::two_byte_vals(opcode, regs, vals)
+    }
+
+    fn two_byte_val(opcode: u8, val: u8, regs: Regs) -> TestCase {
+        TestCase::two_byte_vals(opcode, regs, [val; 6])
+    }
+
+    fn three_byte_vals(opcode: u8, regs: Regs, vals: [u8; 3]) -> TestCase {
+        let data = vec![
+            (regs.pc as usize, vec![opcode, 0x33, 0x44]),
+            (0x4433, vec![vals[0]]), // abs value
+            // if abi, call with x/y < 0xcd and x/y >= cd
+            (
+                0x4433u16.wrapping_add(regs.x as u16) as usize,
+                vec![vals[1]],
+            ), // abx value
+            (
+                0x4433u16.wrapping_add(regs.y as u16) as usize,
+                vec![vals[2]],
+            ), // aby value
+        ];
+        TestCase {
+            data,
+            regs: Some(regs),
+        }
+    }
+
+    fn three_byte_no_deps(opcode: u8, regs: Regs) -> TestCase {
+        let vals = [0x78, 0x79, 0x80];
+        for byte in vals {
+            assert!(regs.a != byte && regs.x != byte && regs.y != byte);
+        }
+        TestCase::three_byte_vals(opcode, regs, vals)
+    }
+
+    fn three_byte_val(opcode: u8, val: u8, regs: Regs) -> TestCase {
+        TestCase::three_byte_vals(opcode, regs, [val; 3])
+    }
 }
 
 struct Harness {
@@ -371,13 +495,7 @@ fn test_flags_push() {
     //             PHP   CLC   SEC   PHA   CLI   SEI   CLV   CLD   SED
     for opcode in [0x08, 0x18, 0x38, 0x48, 0x58, 0x78, 0xb8, 0xd8, 0xf8] {
         for flags in [0b00000000, 0b11111111, 0b01010101, 0b10101010] {
-            let tc = TestCase {
-                data: vec![(0x200, vec![opcode])],
-                regs: Some(Regs {
-                    flags: flags,
-                    ..test_regs()
-                }),
-            };
+            let tc = TestCase::one_byte_no_deps(opcode, flags);
             let mut h = Harness::new(&tc);
             h.run();
         }
@@ -405,17 +523,11 @@ fn test_pull() {
 }
 
 #[test]
-fn test_implicit_no_arith() {
+fn test_implicit_no_deps() {
     //             NOP   NOP   NOP   NOP   TXS   NOP   NOP   NOP
     for opcode in [0x1a, 0x3a, 0x5a, 0x7a, 0x9a, 0xda, 0xea, 0xfa] {
         for flags in [0b00000000, 0b11111111] {
-            let tc = TestCase {
-                data: vec![(0x200, vec![opcode])],
-                regs: Some(Regs {
-                    flags: flags,
-                    ..test_regs()
-                }),
-            };
+            let tc = TestCase::one_byte_no_deps(opcode, flags);
             let mut h = Harness::new(&tc);
             h.run();
         }
@@ -424,134 +536,293 @@ fn test_implicit_no_arith() {
 
 #[test]
 fn test_implicit_nz() {
-    // DEX / DEY
     for val in [0x00, 0x01, 0x80] {
         for flags in [0b00000000, 0b11111111] {
-            let tc = TestCase {
-                data: vec![(0x200, vec![0xca])],
-                regs: Some(Regs {
-                    flags: flags,
-                    x: val,
-                    ..test_regs()
-                }),
-            };
+            // TSX
+            let tc = TestCase::one_byte_reg(0xba, Reg::SP, val, flags);
             let mut h = Harness::new(&tc);
             h.run();
-        }
-    }
-}
-
-#[test]
-fn test_abs_no_arith() {
-    //             NOP   STY   STA   STX   SAX
-    for opcode in [0x0c, 0x8c, 0x8d, 0x8e, 0x8f] {
-        for flags in [0b00000000, 0b11111111] {
-            let tc = TestCase {
-                data: vec![(0x200, vec![opcode, 0x33, 0x44]), (0x4433, vec![0xab])],
-                regs: Some(Regs {
-                    flags: flags,
-                    ..test_regs()
-                }),
-            };
-            let mut h = Harness::new(&tc);
-            h.run();
-        }
-    }
-}
-
-#[test]
-fn test_abx_no_arith() {
-    //             NOP   NOP   NOP   NOP   SHY   STA   NOP   NOP
-    for opcode in [0x1c, 0x3c, 0x5c, 0x7c, 0x9c, 0x9d, 0xdc, 0xfc] {
-        for x in [0x34, 0xcd] {
-            for flags in [0b00000000, 0b11111111] {
-                let tc = TestCase {
-                    data: vec![
-                        (0x200, vec![opcode, 0x33, 0x44]),
-                        (0x4467, vec![0xab]),
-                        (0x4500, vec![0xde]),
-                    ],
-                    regs: Some(Regs {
-                        flags: flags,
-                        x: x,
-                        ..test_regs()
-                    }),
-                };
+            //             TAY   TAX
+            for opcode in [0xa8, 0xaa] {
+                let tc = TestCase::one_byte_reg(opcode, Reg::A, val, flags);
                 let mut h = Harness::new(&tc);
                 h.run();
+            }
+            //             DEX   TXA
+            for opcode in [0xca, 0x8a] {
+                let tc = TestCase::one_byte_reg(opcode, Reg::X, val, flags);
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+            //             DEY   TYA
+            for opcode in [0x88, 0x98] {
+                let tc = TestCase::one_byte_reg(opcode, Reg::Y, val, flags);
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+        }
+    }
+    for val in [0x7f, 0xff, 0x00] {
+        for flags in [0b00000000, 0b11111111] {
+            // INX
+            let tc = TestCase::one_byte_reg(0xe8, Reg::X, val, flags);
+            let mut h = Harness::new(&tc);
+            h.run();
+            // INY
+            let tc = TestCase::one_byte_reg(0xc8, Reg::Y, val, flags);
+            let mut h = Harness::new(&tc);
+            h.run();
+        }
+    }
+}
+
+#[test]
+fn test_two_byte_no_deps() {
+    #[rustfmt::skip]
+    let opcodes = [
+    //  NOP
+        0x04, 0x14, 0x34, 0x44, 0x54, 0x64, 0x74, 0x80, 0x82, 0x89, 0xc2, 0xe2, 0xd4, 0xf4,
+    //  STA   SAX   STY   STA   STX   SAX   STA   AHX   STY   STA   STX   SAX
+        0x81, 0x83, 0x84, 0x85, 0x86, 0x87, 0x91, 0x93, 0x94, 0x95, 0x96, 0x97,
+    ];
+
+    for opcode in opcodes {
+        for flags in [0b00000000, 0b11111111] {
+            let tc = TestCase::two_byte_no_deps(
+                opcode,
+                Regs {
+                    flags: flags,
+                    ..test_regs()
+                },
+            );
+            let mut h = Harness::new(&tc);
+            h.run();
+            let tc = TestCase::two_byte_no_deps(
+                opcode,
+                Regs {
+                    flags: flags,
+                    y: 0x87, // for izy page crossing
+                    ..test_regs()
+                },
+            );
+            let mut h = Harness::new(&tc);
+            h.run();
+        }
+    }
+}
+
+#[test]
+fn test_two_byte_nz() {
+    #[rustfmt::skip]
+    let opcodes = [
+    //  LDA
+        0xa1, 0xa5, 0xa9, 0xb1, 0xb5,
+    //  LDX               LDY
+        0xa2, 0xa6, 0xb6, 0xa0, 0xa4, 0xb4,
+    //  LAX
+        0xa3, 0xa7, 0xb3, 0xb7,
+    //  DEC
+        0xc6, 0xd6,
+    ];
+
+    for opcode in opcodes {
+        for val in [0x00, 0x01, 0x80] {
+            for flags in [0b00000000, 0b11111111] {
+                let tc = TestCase::two_byte_val(
+                    opcode,
+                    val,
+                    Regs {
+                        flags,
+                        ..test_regs()
+                    },
+                );
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+        }
+    }
+
+    // INC
+    for opcode in [0xe6, 0xf6] {
+        for val in [0x7f, 0xff, 0x00] {
+            for flags in [0b00000000, 0b11111111] {
+                let tc = TestCase::two_byte_val(
+                    opcode,
+                    val,
+                    Regs {
+                        flags,
+                        ..test_regs()
+                    },
+                );
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+        }
+    }
+
+    let booleans = [
+        //  ORA
+        (
+            vec![0x01, 0x05, 0x09, 0x11, 0x15],
+            vec![(0x00, 0x00), (0x01, 0x00), (0x80, 0x01)],
+        ),
+        //  AND
+        (
+            vec![0x21, 0x25, 0x29, 0x31, 0x35],
+            vec![(0xaa, 0x55), (0x10, 0x80), (0x80, 0xff)],
+        ),
+        //  EOR
+        (
+            vec![0x41, 0x45, 0x49, 0x41, 0x55],
+            vec![(0x33, 0x33), (0xff, 0x80), (0xff, 0x01)],
+        ),
+        // BIT
+        (vec![0x24], vec![(0x00, 0xc0), (0xff, 0x3f), (0xaa, 0x55)]),
+    ];
+
+    for flags in [0b00000000, 0b11111111] {
+        for (opcodes, vals) in &booleans {
+            for &opcode in opcodes {
+                for &val in vals {
+                    let tc = TestCase::two_byte_val(
+                        opcode as u8,
+                        val.1 as u8,
+                        Regs {
+                            flags,
+                            a: val.0,
+                            ..test_regs()
+                        },
+                    );
+                    let mut h = Harness::new(&tc);
+                    h.run();
+                }
             }
         }
     }
 }
 
 #[test]
-fn test_aby_no_arith() {
-    //             TAS   SHX   AHX     LAS
-    for opcode in [0x9b, 0x9e, 0x9f /* 0xbb */] {
-        for y in [0x45, 0xcd] {
+fn test_three_byte_no_deps() {
+    #[rustfmt::skip]
+    let opcodes = [
+    //  NOP
+        0x0c, 0x1c, 0x3c, 0x5c, 0x7c, 0xdc, 0xfc,
+    //  STY   STA   STX   SAX   TAS   SHY   STA   SHX   AHX   LAS
+        0x8c, 0x8d, 0x8e, 0x8f, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f,
+    ];
+
+    for opcode in opcodes {
+        for flags in [0b00000000, 0b11111111] {
+            let tc = TestCase::three_byte_no_deps(
+                opcode,
+                Regs {
+                    flags,
+                    ..test_regs()
+                },
+            );
+            let mut h = Harness::new(&tc);
+            h.run();
+            let tc = TestCase::three_byte_no_deps(
+                opcode,
+                Regs {
+                    flags,
+                    x: 0xcd,
+                    y: 0xcd,
+                    ..test_regs()
+                },
+            );
+            let mut h = Harness::new(&tc);
+            h.run();
+        }
+    }
+}
+
+#[test]
+fn test_three_byte_nz() {
+    #[rustfmt::skip]
+    let opcodes = [
+    //  LDA
+        0xad, 0xbd, 0xb9,
+    //  LDX         LDY
+        0xae, 0xbe, 0xac, 0xbc,
+    //  LAX
+        0xaf, 0xbf,
+    //  DEC
+        0xce, 0xde,
+    ];
+
+    for opcode in opcodes {
+        for val in [0x00, 0x01, 0x80] {
             for flags in [0b00000000, 0b11111111] {
-                let tc = TestCase {
-                    data: vec![
-                        (0x200, vec![opcode, 0x33, 0x44]),
-                        (0x4478, vec![0xab]),
-                        (0x4500, vec![0xde]),
-                    ],
-                    regs: Some(Regs {
-                        flags: flags,
-                        y: y,
+                let tc = TestCase::three_byte_val(
+                    opcode,
+                    val,
+                    Regs {
+                        flags,
                         ..test_regs()
-                    }),
-                };
+                    },
+                );
                 let mut h = Harness::new(&tc);
                 h.run();
             }
         }
     }
-}
 
-#[test]
-fn test_imm_zp_no_arith() {
-    //  NOP   NOP   NOP   NOP   NOP   STY   STA   STX   SAX   NOP   NOP   NOP
-    for opcode in [
-        0x04, 0x44, 0x64, 0x80, 0x82, 0x84, 0x85, 0x86, 0x87, 0x89, 0xc2, 0xe2,
-    ] {
-        for flags in [0b00000000, 0b11111111] {
-            let tc = TestCase {
-                data: vec![
-                    (0x200, vec![opcode, 0x78]),
-                    (0x78, vec![0x9a]),
-                    (0xac, vec![0xdb]),
-                ],
-                regs: Some(Regs {
-                    flags: flags,
-                    ..test_regs()
-                }),
-            };
-            let mut h = Harness::new(&tc);
-            h.run();
+    // INC
+    for opcode in [0xee, 0xfe] {
+        for val in [0x7f, 0xff, 0x00] {
+            for flags in [0b00000000, 0b11111111] {
+                let tc = TestCase::three_byte_val(
+                    opcode,
+                    val,
+                    Regs {
+                        flags,
+                        ..test_regs()
+                    },
+                );
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
         }
     }
-}
 
-#[test]
-fn test_zpi_no_arith() {
-    //             NOP   NOP   NOP   NOP   STY   STA   STX   SAX   NOP   NOP
-    for opcode in [0x14, 0x34, 0x54, 0x74, 0x94, 0x95, 0x96, 0x97, 0xd4, 0xf4] {
-        for flags in [0b00000000, 0b11111111] {
-            let tc = TestCase {
-                data: vec![
-                    (0x200, vec![opcode, 0x78]),
-                    (0x78, vec![0x9a]),
-                    (0xac, vec![0xdb]),
-                    (0xbd, vec![0xcf]),
-                ],
-                regs: Some(Regs {
-                    flags: flags,
-                    ..test_regs()
-                }),
-            };
-            let mut h = Harness::new(&tc);
-            h.run();
+    let booleans = [
+        //  ORA
+        (
+            vec![0x0d, 0x19, 0x1d],
+            vec![(0x00, 0x00), (0x01, 0x00), (0x80, 0x01)],
+        ),
+        //  AND
+        (
+            vec![0x2d, 0x39, 0x3d],
+            vec![(0xaa, 0x55), (0x10, 0x80), (0x80, 0xff)],
+        ),
+        //  EOR
+        (
+            vec![0x4d, 0x59, 0x5d],
+            vec![(0x33, 0x33), (0xff, 0x80), (0xff, 0x01)],
+        ),
+        // BIT
+        (vec![0x2c], vec![(0x00, 0xc0), (0xff, 0x3f), (0xaa, 0x55)]),
+    ];
+
+    for flags in [0b00000000, 0b11111111] {
+        for (opcodes, vals) in &booleans {
+            for &opcode in opcodes {
+                for &val in vals {
+                    let tc = TestCase::three_byte_val(
+                        opcode as u8,
+                        val.1 as u8,
+                        Regs {
+                            flags,
+                            a: val.0,
+                            ..test_regs()
+                        },
+                    );
+                    let mut h = Harness::new(&tc);
+                    h.run();
+                }
+            }
         }
     }
 }
