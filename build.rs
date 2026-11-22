@@ -5,6 +5,7 @@ fn main() {
         // println!("cargo:warning=Building with 'test-perfect'");
         println!("cargo::rerun-if-changed=src/c");
         cc::Build::new()
+            .opt_level(3)
             .file("src/c/netlist_sim.c")
             .file("src/c/perfect6502.c")
             .compile("perfect6502");

@@ -1155,9 +1155,9 @@ impl CPU {
         val
     }
 
-    fn isc(data: u8, cpu: &mut Self, bus: &mut Bus, _: &mut Control) -> u8 {
-        let val = CPU::inc(data, cpu);
-        CPU::sbc(bus.addr as u8, cpu);
+    fn isc(data: u8, cpu: &mut Self) -> u8 {
+        let val = data.wrapping_add(1);
+        CPU::sbc(val, cpu);
         val
     }
 
@@ -1167,9 +1167,9 @@ impl CPU {
         val
     }
 
-    fn dcp(data: u8, cpu: &mut Self, bus: &mut Bus, _: &mut Control) -> u8 {
-        let val = CPU::dec(data, cpu);
-        CPU::cmp(bus.addr as u8, cpu);
+    fn dcp(data: u8, cpu: &mut Self) -> u8 {
+        let val = data.wrapping_sub(1);
+        CPU::cmp(val, cpu);
         val
     }
 

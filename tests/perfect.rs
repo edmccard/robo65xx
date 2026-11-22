@@ -193,7 +193,7 @@ struct TestCase {
 }
 
 impl TestCase {
-    fn one_byte_no_deps(opcode: u8, flags: u8) -> TestCase {
+    fn one_byte(opcode: u8, flags: u8) -> TestCase {
         let data = vec![(0x200, vec![opcode])];
         TestCase {
             data,
@@ -264,7 +264,7 @@ impl TestCase {
         }
     }
 
-    fn two_byte_no_deps(opcode: u8, regs: Regs) -> TestCase {
+    fn two_byte(opcode: u8, regs: Regs) -> TestCase {
         let vals = [0x78, 0x79, 0x80, 0x81, 0x82, 0x83];
         for byte in vals {
             assert!(regs.a != byte && regs.x != byte && regs.y != byte);
@@ -296,7 +296,7 @@ impl TestCase {
         }
     }
 
-    fn three_byte_no_deps(opcode: u8, regs: Regs) -> TestCase {
+    fn three_byte(opcode: u8, regs: Regs) -> TestCase {
         let vals = [0x78, 0x79, 0x80];
         for byte in vals {
             assert!(regs.a != byte && regs.x != byte && regs.y != byte);
@@ -423,10 +423,20 @@ impl Harness {
         }
         if p_log.len() > log.len() {
             // interrupt too soon, or single op wrong cycle count
-            assert!(false, "Too few cycles");
+            let mut msg = String::new();
+            for i in 0..p_log.len() {
+                let prefix = if i < log.len() { " " } else { "-" };
+                msg.push_str(&format!("{}{:2} {}\n   ", prefix, i, &p_log[i][0..21]));
+            }
+            assert!(false, "{}", msg);
         } else if p_log.len() < log.len() {
             // interrupt too late, or single op wrong cycle count
-            assert!(false, "Too many cycles");
+            let mut msg = String::new();
+            for i in 0..log.len() {
+                let prefix = if i >= p_log.len() { "+" } else { " " };
+                msg.push_str(&format!("{}{:2} {}\n   ", prefix, i, &log[i][0..21]));
+            }
+            assert!(false, "{}", msg);
         }
         if !Harness::check_bus(&p_log, &log) {
             let mut msg = String::new();
@@ -498,7 +508,7 @@ fn test_flags_push() {
     //             PHP   CLC   SEC   PHA   CLI   SEI   CLV   CLD   SED
     for opcode in [0x08, 0x18, 0x38, 0x48, 0x58, 0x78, 0xb8, 0xd8, 0xf8] {
         for flags in [0b00000000, 0b11111111, 0b01010101, 0b10101010] {
-            let tc = TestCase::one_byte_no_deps(opcode, flags);
+            let tc = TestCase::one_byte(opcode, flags);
             let mut h = Harness::new(&tc);
             h.run();
         }
@@ -526,11 +536,11 @@ fn test_pull() {
 }
 
 #[test]
-fn test_implicit_no_deps() {
+fn test_implicit() {
     //             NOP   NOP   NOP   NOP   TXS   NOP   NOP   NOP
     for opcode in [0x1a, 0x3a, 0x5a, 0x7a, 0x9a, 0xda, 0xea, 0xfa] {
         for flags in [0b00000000, 0b11111111] {
-            let tc = TestCase::one_byte_no_deps(opcode, flags);
+            let tc = TestCase::one_byte(opcode, flags);
             let mut h = Harness::new(&tc);
             h.run();
         }
@@ -606,7 +616,7 @@ fn test_implicit_val() {
 }
 
 #[test]
-fn test_two_byte_no_deps() {
+fn test_two_byte() {
     #[rustfmt::skip]
     let opcodes = [
     //  NOP
@@ -617,7 +627,7 @@ fn test_two_byte_no_deps() {
 
     for opcode in opcodes {
         for flags in [0b00000000, 0b11111111] {
-            let tc = TestCase::two_byte_no_deps(
+            let tc = TestCase::two_byte(
                 opcode,
                 Regs {
                     flags: flags,
@@ -626,7 +636,7 @@ fn test_two_byte_no_deps() {
             );
             let mut h = Harness::new(&tc);
             h.run();
-            let tc = TestCase::two_byte_no_deps(
+            let tc = TestCase::two_byte(
                 opcode,
                 Regs {
                     flags: flags,
@@ -650,8 +660,8 @@ fn test_two_byte_val() {
         0xa2, 0xa6, 0xb6, 0xa0, 0xa4, 0xb4,
     //  LAX                     XAA
         0xa3, 0xa7, 0xb3, 0xb7, 0x8b,
-    //  DEC
-        0xc6, 0xd6,
+    //  DEC         DCP
+        0xc6, 0xd6, 0xc7, 0xd7, 0xc3, 0xd3
     ];
 
     for opcode in opcodes {
@@ -725,8 +735,8 @@ fn test_two_byte_val() {
         }
     }
 
-    // INC
-    for opcode in [0xe6, 0xf6] {
+    // INC / ISC
+    for opcode in [0xe6, 0xf6, 0xe7, 0xf7, 0xe3, 0xf3] {
         for val in [0x7f, 0xff, 0x00] {
             for flags in [0b00000000, 0b11111111] {
                 let tc = TestCase::two_byte_val(
@@ -825,7 +835,8 @@ fn test_two_byte_val() {
 }
 
 #[test]
-fn test_branch() {
+fn test_flow() {
+    // Branches.
     for opcode in [0x10, 0x30, 0x50, 0x70, 0x90, 0xb0, 0xd0, 0xf0] {
         for flags in [0b00000000, 0b11111111] {
             let tc = TestCase {
@@ -848,6 +859,41 @@ fn test_branch() {
             h.run();
         }
     }
+
+    // JMP
+    let tc = TestCase {
+        data: vec![(0x200, vec![0x4c, 0x10, 0x30]), (0x3010, vec![0xea])],
+        regs: Some(Regs { ..test_regs() }),
+    };
+    let mut h = Harness::new(&tc);
+    h.run();
+
+    // JMP indirect
+    for lo_byte in [0x10, 0xff] {
+        let tc = TestCase {
+            data: vec![
+                (0x200, vec![0x6c, lo_byte, 0x30]),
+                (0x3010, vec![0x20, 0x40]),
+                (0x30ff, vec![0x60]),
+                (0x3100, vec![0x60]),
+                (0x3000, vec![0x50]),
+                (0x5060, vec![0xea]),
+                (0x6060, vec![0xea]),
+                (0x4020, vec![0xea]),
+            ],
+            regs: Some(Regs { ..test_regs() }),
+        };
+        let mut h = Harness::new(&tc);
+        h.run();
+    }
+
+    // JSR / RTS
+    let tc = TestCase {
+        data: vec![(0x200, vec![0x20, 0x10, 0x30, 0xea]), (0x3010, vec![0x60])],
+        regs: Some(Regs { ..test_regs() }),
+    };
+    let mut h = Harness::new(&tc);
+    h.run();
 }
 
 #[test]
@@ -938,7 +984,7 @@ fn test_arith() {
 }
 
 #[test]
-fn test_three_byte_no_deps() {
+fn test_three_byte() {
     #[rustfmt::skip]
     let opcodes = [
     //  NOP
@@ -949,7 +995,7 @@ fn test_three_byte_no_deps() {
 
     for opcode in opcodes {
         for flags in [0b00000000, 0b11111111] {
-            let tc = TestCase::three_byte_no_deps(
+            let tc = TestCase::three_byte(
                 opcode,
                 Regs {
                     flags,
@@ -958,7 +1004,7 @@ fn test_three_byte_no_deps() {
             );
             let mut h = Harness::new(&tc);
             h.run();
-            let tc = TestCase::three_byte_no_deps(
+            let tc = TestCase::three_byte(
                 opcode,
                 Regs {
                     flags,
@@ -983,8 +1029,8 @@ fn test_three_byte_val() {
         0xae, 0xbe, 0xac, 0xbc,
     //  LAX
         0xaf, 0xbf,
-    //  DEC
-        0xce, 0xde,
+    //  DEC         DCP
+        0xce, 0xde, 0xdf, 0xdb
     ];
 
     for opcode in opcodes {
@@ -1004,8 +1050,8 @@ fn test_three_byte_val() {
         }
     }
 
-    // ASL / ROL
-    for opcode in [0x0e, 0x1e, 0x2e, 0x3e] {
+    // ASL / ROL / SLO / SRE
+    for opcode in [0x0e, 0x1e, 0x2e, 0x3e, 0x1f, 0x1b, 0x5f, 0x5b] {
         for val in [0x80, 0x00, 0x40, 0xc0, 0xa0, 0x10] {
             for flags in [0b00000000, 0b11111111] {
                 let tc = TestCase::three_byte_val(
@@ -1022,8 +1068,8 @@ fn test_three_byte_val() {
         }
     }
 
-    // LSR / ROR
-    for opcode in [0x4e, 0x5e, 0x6e, 0x7e] {
+    // LSR / ROR / RLA / RRA
+    for opcode in [0x4e, 0x5e, 0x6e, 0x7e, 0x3f, 0x3b, 0x7f, 0x7b] {
         for val in [0x01, 0xfe] {
             for flags in [0b00000000, 0b11111111] {
                 let tc = TestCase::three_byte_val(
@@ -1040,8 +1086,8 @@ fn test_three_byte_val() {
         }
     }
 
-    // INC
-    for opcode in [0xee, 0xfe] {
+    // INC / ISC
+    for opcode in [0xee, 0xfe, 0xff, 0xfb] {
         for val in [0x7f, 0xff, 0x00] {
             for flags in [0b00000000, 0b11111111] {
                 let tc = TestCase::three_byte_val(
