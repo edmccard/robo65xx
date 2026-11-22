@@ -1,3 +1,6 @@
+// TODO: change 0xab "magic constant" for tests
+//       used timed6502 for 0x0b, 0x2b, 0x4b, 0x6b, 0xbb
+
 use std::{
     ffi::{c_int, c_void},
     fmt::Display,
@@ -149,7 +152,7 @@ impl Display for P6502 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} {}{}{}{} {} {:04x} {:02x} {} {:04x} {:02x} {:02x} {:02x} {:02x} {:02x} {} {}",
+            "{} {}{}{}{} {} {:04x} {:02x} {} {:02x} {:04x} {:02x} {:02x} {:02x} {:02x} {} {}",
             if self.sync() { "S" } else { "s" },
             if self.res() { "R" } else { "r" },
             if self.nmi() { "N" } else { "n" },
@@ -159,8 +162,8 @@ impl Display for P6502 {
             self.addr(),
             self.data(),
             if self.intg() { "!" } else { "." },
-            self.pc(),
             self.op(),
+            self.pc(),
             self.a(),
             self.x(),
             self.y(),
@@ -428,16 +431,16 @@ impl Harness {
         if !Harness::check_bus(&p_log, &log) {
             let mut msg = String::new();
             for i in 0..p_log.len() {
-                msg.push_str(&format!("{:2} {}\n   ", i, &p_log[i][0..26]));
-                msg.push_str(&Harness::log_diff(&p_log[i][0..26], &log[i][0..26]))
+                msg.push_str(&format!("{:2} {}\n   ", i, &p_log[i][0..21]));
+                msg.push_str(&Harness::log_diff(&p_log[i][0..21], &log[i][0..21]))
             }
             assert!(false, "{}", msg);
         }
-        let p_regs = &p_log.last().unwrap()[24..47];
-        let regs = &log.last().unwrap()[24..47];
+        let p_regs = &p_log.last().unwrap()[19..47];
+        let regs = &log.last().unwrap()[19..47];
+        let op = &log[log.len() - 2][19..21];
         if p_regs != regs {
             let i = log.len() - 1;
-            let op = &p_log[log.len() - 2][24..26];
             let mut msg = format!("{:2} {} {}\n   ", i, op, &p_regs[3..]);
             msg.push_str(&Harness::log_diff(p_regs, regs));
             assert!(false, "{}", msg);
@@ -458,7 +461,7 @@ impl Harness {
 
     fn check_bus(p_log: &[String], log: &[String]) -> bool {
         for i in 0..p_log.len() {
-            if p_log[i][0..26] != log[i][0..26] {
+            if p_log[i][0..21] != log[i][0..21] {
                 return false;
             }
         }
@@ -535,7 +538,7 @@ fn test_implicit_no_deps() {
 }
 
 #[test]
-fn test_implicit_nz() {
+fn test_implicit_val() {
     for val in [0x00, 0x01, 0x80] {
         for flags in [0b00000000, 0b11111111] {
             // TSX
@@ -570,6 +573,32 @@ fn test_implicit_nz() {
             h.run();
             // INY
             let tc = TestCase::one_byte_reg(0xc8, Reg::Y, val, flags);
+            let mut h = Harness::new(&tc);
+            h.run();
+        }
+    }
+
+    for val in [0x80, 0x00, 0x40, 0xc0, 0xa0, 0x10] {
+        for flags in [0b00000000, 0b11111111] {
+            // ASL
+            let tc = TestCase::one_byte_reg(0x0a, Reg::A, val, flags);
+            let mut h = Harness::new(&tc);
+            h.run();
+            // ROL
+            let tc = TestCase::one_byte_reg(0x2a, Reg::A, val, flags);
+            let mut h = Harness::new(&tc);
+            h.run();
+        }
+    }
+
+    for val in [0x01, 0xfe] {
+        for flags in [0b00000000, 0b11111111] {
+            // LSR
+            let tc = TestCase::one_byte_reg(0x4a, Reg::A, val, flags);
+            let mut h = Harness::new(&tc);
+            h.run();
+            // ROR
+            let tc = TestCase::one_byte_reg(0x6a, Reg::A, val, flags);
             let mut h = Harness::new(&tc);
             h.run();
         }
@@ -612,15 +641,15 @@ fn test_two_byte_no_deps() {
 }
 
 #[test]
-fn test_two_byte_nz() {
+fn test_two_byte_val() {
     #[rustfmt::skip]
     let opcodes = [
     //  LDA
         0xa1, 0xa5, 0xa9, 0xb1, 0xb5,
     //  LDX               LDY
         0xa2, 0xa6, 0xb6, 0xa0, 0xa4, 0xb4,
-    //  LAX
-        0xa3, 0xa7, 0xb3, 0xb7,
+    //  LAX                     XAA
+        0xa3, 0xa7, 0xb3, 0xb7, 0x8b,
     //  DEC
         0xc6, 0xd6,
     ];
@@ -642,9 +671,103 @@ fn test_two_byte_nz() {
         }
     }
 
+    // CPY
+    for opcode in [0xc0, 0xc4] {
+        for val in [0x44, 0x45, 0x46] {
+            for flags in [0b00000000, 0b11111111] {
+                let tc = TestCase::two_byte_val(
+                    opcode,
+                    val,
+                    Regs {
+                        flags,
+                        ..test_regs()
+                    },
+                );
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+        }
+    }
+
+    // CPX
+    for opcode in [0xe0, 0xe4] {
+        for val in [0x33, 0x34, 0x35] {
+            for flags in [0b00000000, 0b11111111] {
+                let tc = TestCase::two_byte_val(
+                    opcode,
+                    val,
+                    Regs {
+                        flags,
+                        ..test_regs()
+                    },
+                );
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+        }
+    }
+
+    // CMP
+    for opcode in [0xc1, 0xc5, 0xc9, 0xd1, 0xd5] {
+        for val in [0x11, 0x12, 0x13] {
+            for flags in [0b00000000, 0b11111111] {
+                let tc = TestCase::two_byte_val(
+                    opcode,
+                    val,
+                    Regs {
+                        flags,
+                        ..test_regs()
+                    },
+                );
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+        }
+    }
+
     // INC
     for opcode in [0xe6, 0xf6] {
         for val in [0x7f, 0xff, 0x00] {
+            for flags in [0b00000000, 0b11111111] {
+                let tc = TestCase::two_byte_val(
+                    opcode,
+                    val,
+                    Regs {
+                        flags,
+                        ..test_regs()
+                    },
+                );
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+        }
+    }
+
+    // ASL / ROL / SLO / SRE
+    for opcode in [
+        0x06, 0x16, 0x26, 0x36, 0x07, 0x17, 0x03, 0x13, 0x47, 0x57, 0x43, 0x53,
+    ] {
+        for val in [0x80, 0x00, 0x40, 0xc0, 0xa0, 0x10] {
+            for flags in [0b00000000, 0b11111111] {
+                let tc = TestCase::two_byte_val(
+                    opcode,
+                    val,
+                    Regs {
+                        flags,
+                        ..test_regs()
+                    },
+                );
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+        }
+    }
+
+    // LSR / ROR / RLA / RRA
+    for opcode in [
+        0x46, 0x56, 0x66, 0x76, 0x27, 0x37, 0x23, 0x33, 0x67, 0x77, 0x63, 0x73,
+    ] {
+        for val in [0x01, 0xfe] {
             for flags in [0b00000000, 0b11111111] {
                 let tc = TestCase::two_byte_val(
                     opcode,
@@ -702,13 +825,126 @@ fn test_two_byte_nz() {
 }
 
 #[test]
+fn test_branch() {
+    for opcode in [0x10, 0x30, 0x50, 0x70, 0x90, 0xb0, 0xd0, 0xf0] {
+        for flags in [0b00000000, 0b11111111] {
+            let tc = TestCase {
+                data: vec![(0x200, vec![opcode, 0xfd, 0xea])],
+                regs: Some(Regs {
+                    flags,
+                    ..test_regs()
+                }),
+            };
+            let mut h = Harness::new(&tc);
+            h.run();
+            let tc = TestCase {
+                data: vec![(0x200, vec![opcode, 0x01, 0xea])],
+                regs: Some(Regs {
+                    flags,
+                    ..test_regs()
+                }),
+            };
+            let mut h = Harness::new(&tc);
+            h.run();
+        }
+    }
+}
+
+#[test]
+#[ignore]
+fn test_arith() {
+    let adc = vec![
+        (0x80, 0x80),
+        (0xff, 0x02),
+        (0x50, 0x50),
+        (0x10, 0x20),
+        (0x10, 0x90),
+        (0x10, 0x70),
+        (0x10, 0x10),
+    ];
+    let sbc = vec![
+        (0x80, 0x01),
+        (0x81, 0x01),
+        (0x50, 0x10),
+        (0x50, 0x80),
+        (0x10, 0x10),
+        (0x10, 0x20),
+        (0x10, 0x01),
+        (0x10, 0x80),
+    ];
+
+    for flags in [0b00000000, 0b11110111, 0b00001000, 0b11111111] {
+        for opcode in [0x61, 0x65, 0x69, 0x71, 0x75] {
+            for val in &adc {
+                let tc = TestCase::two_byte_val(
+                    opcode,
+                    val.1,
+                    Regs {
+                        flags,
+                        a: val.0,
+                        ..test_regs()
+                    },
+                );
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+        }
+        for opcode in [0xcb, 0xe1, 0xe5, 0xe9, 0xeb, 0xf1, 0xf5] {
+            for val in &sbc {
+                let tc = TestCase::two_byte_val(
+                    opcode,
+                    val.1,
+                    Regs {
+                        flags,
+                        a: val.0,
+                        ..test_regs()
+                    },
+                );
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+        }
+        for opcode in [0x6d, 0x79, 0x7d] {
+            for val in &adc {
+                let tc = TestCase::three_byte_val(
+                    opcode,
+                    val.1,
+                    Regs {
+                        flags,
+                        a: val.0,
+                        ..test_regs()
+                    },
+                );
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+        }
+        for opcode in [0xed, 0xf9, 0xfd] {
+            for val in &sbc {
+                let tc = TestCase::three_byte_val(
+                    opcode,
+                    val.1,
+                    Regs {
+                        flags,
+                        a: val.0,
+                        ..test_regs()
+                    },
+                );
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+        }
+    }
+}
+
+#[test]
 fn test_three_byte_no_deps() {
     #[rustfmt::skip]
     let opcodes = [
     //  NOP
         0x0c, 0x1c, 0x3c, 0x5c, 0x7c, 0xdc, 0xfc,
-    //  STY   STA   STX   SAX   TAS   SHY   STA   SHX   AHX   LAS
-        0x8c, 0x8d, 0x8e, 0x8f, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f,
+    //  STY   STA   STX   SAX   TAS   SHY   STA   SHX   AHX
+        0x8c, 0x8d, 0x8e, 0x8f, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f
     ];
 
     for opcode in opcodes {
@@ -738,7 +974,7 @@ fn test_three_byte_no_deps() {
 }
 
 #[test]
-fn test_three_byte_nz() {
+fn test_three_byte_val() {
     #[rustfmt::skip]
     let opcodes = [
     //  LDA
@@ -753,6 +989,42 @@ fn test_three_byte_nz() {
 
     for opcode in opcodes {
         for val in [0x00, 0x01, 0x80] {
+            for flags in [0b00000000, 0b11111111] {
+                let tc = TestCase::three_byte_val(
+                    opcode,
+                    val,
+                    Regs {
+                        flags,
+                        ..test_regs()
+                    },
+                );
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+        }
+    }
+
+    // ASL / ROL
+    for opcode in [0x0e, 0x1e, 0x2e, 0x3e] {
+        for val in [0x80, 0x00, 0x40, 0xc0, 0xa0, 0x10] {
+            for flags in [0b00000000, 0b11111111] {
+                let tc = TestCase::three_byte_val(
+                    opcode,
+                    val,
+                    Regs {
+                        flags,
+                        ..test_regs()
+                    },
+                );
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+        }
+    }
+
+    // LSR / ROR
+    for opcode in [0x4e, 0x5e, 0x6e, 0x7e] {
+        for val in [0x01, 0xfe] {
             for flags in [0b00000000, 0b11111111] {
                 let tc = TestCase::three_byte_val(
                     opcode,
@@ -783,6 +1055,56 @@ fn test_three_byte_nz() {
                 let mut h = Harness::new(&tc);
                 h.run();
             }
+        }
+    }
+
+    // CMP
+    for opcode in [0xcd, 0xd9, 0xdd] {
+        for flags in [0b00000000, 0b11111111] {
+            for val in [0x11, 0x12, 0x13] {
+                let tc = TestCase::three_byte_val(
+                    opcode,
+                    val,
+                    Regs {
+                        flags,
+                        ..test_regs()
+                    },
+                );
+                let mut h = Harness::new(&tc);
+                h.run();
+            }
+        }
+    }
+
+    // CPX
+    for val in [0x33, 0x34, 0x35] {
+        for flags in [0b00000000, 0b11111111] {
+            let tc = TestCase::three_byte_val(
+                0xec,
+                val,
+                Regs {
+                    flags,
+                    ..test_regs()
+                },
+            );
+            let mut h = Harness::new(&tc);
+            h.run();
+        }
+    }
+
+    // CPY
+    for val in [0x44, 0x45, 0x46] {
+        for flags in [0b00000000, 0b11111111] {
+            let tc = TestCase::three_byte_val(
+                0xcc,
+                val,
+                Regs {
+                    flags,
+                    ..test_regs()
+                },
+            );
+            let mut h = Harness::new(&tc);
+            h.run();
         }
     }
 

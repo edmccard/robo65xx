@@ -94,7 +94,7 @@ impl Flags {
     }
 
     fn set_n(&mut self, val: u8) {
-        self.0 &= val & 0b01111111;
+        self.0 &= 0b01111111;
         self.0 |= val & 0b10000000;
     }
 
@@ -241,8 +241,8 @@ impl Display for CPU {
         let intg = if self.intg { "!" } else { "." };
         write!(
             f,
-            "{} {:04x} {:02x} {:02x} {:02x} {:02x} {:02x} {} {}",
-            intg, self.pc, self.op, self.a, self.x, self.y, self.sp, self.flags, self.op_cycle
+            "{} {:02x} {:04x} {:02x} {:02x} {:02x} {:02x} {} {}",
+            intg, self.op, self.pc, self.a, self.x, self.y, self.sp, self.flags, self.op_cycle
         )
     }
 }
@@ -1053,7 +1053,6 @@ impl CPU {
         let v = !(a ^ val) & (val ^ sum) & 0x80;
         cpu.flags.update_v(v != 0);
         cpu.flags.set_n(sum as u8);
-
         cpu.flags
             .set_z(a.wrapping_add(val).wrapping_add(cpu.flags.c() as u16) as u8);
 
@@ -1208,7 +1207,7 @@ impl CPU {
     }
 
     fn rra(data: u8, cpu: &mut Self) -> u8 {
-        let val = CPU::rol(data, cpu);
+        let val = CPU::ror(data, cpu);
         CPU::adc(val, cpu);
         val
     }
